@@ -38,9 +38,6 @@ main = defaultMainWithHooks $ simpleUserHooks {
     , instHook = \pkgdescr ->
          instHook simpleUserHooks pkgdescr{ executables =
             [x | x <- executables pkgdescr, exeName x `notElem` noInstall] }
-    , postBuild = \args bf pkgdescr lbi -> do
-            makeManPages args bf pkgdescr lbi
-            makeReferenceFiles args bf pkgdescr lbi
     }
   where
     noInstall = ["make-pandoc-man-pages","make-reference-files"]

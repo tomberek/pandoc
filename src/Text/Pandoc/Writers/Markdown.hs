@@ -46,7 +46,6 @@ import Text.Pandoc.Pretty
 import Control.Monad.State
 import qualified Data.Set as Set
 import Text.Pandoc.Writers.HTML (writeHtmlString)
-import Text.Pandoc.Readers.TeXMath (texMathToInlines)
 import Text.HTML.TagSoup (parseTags, isTagText, Tag(..))
 import Network.URI (isURI)
 import Data.Default
@@ -820,27 +819,6 @@ inlineToMarkdown opts (Str str) = do
   if stPlain st
      then return $ text str
      else return $ text $ escapeString opts str
-inlineToMarkdown opts (Math InlineMath str)
-  | isEnabled Ext_tex_math_dollars opts =
-      return $ "$" <> text str <> "$"
-  | isEnabled Ext_tex_math_single_backslash opts =
-      return $ "\\(" <> text str <> "\\)"
-  | isEnabled Ext_tex_math_double_backslash opts =
-      return $ "\\\\(" <> text str <> "\\\\)"
-  | otherwise = do
-    plain <- gets stPlain
-    inlineListToMarkdown opts $
-      (if plain then makeMathPlainer else id) $
-      texMathToInlines InlineMath str
-inlineToMarkdown opts (Math DisplayMath str)
-  | isEnabled Ext_tex_math_dollars opts =
-      return $ "$$" <> text str <> "$$"
-  | isEnabled Ext_tex_math_single_backslash opts =
-      return $ "\\[" <> text str <> "\\]"
-  | isEnabled Ext_tex_math_double_backslash opts =
-      return $ "\\\\[" <> text str <> "\\\\]"
-  | otherwise = (\x -> cr <> x <> cr) `fmap`
-        inlineListToMarkdown opts (texMathToInlines DisplayMath str)
 inlineToMarkdown opts (RawInline f str) = do
   plain <- gets stPlain
   if not plain &&

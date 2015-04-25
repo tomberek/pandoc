@@ -34,7 +34,6 @@ import Text.Pandoc.Templates
 import Text.Pandoc.Shared
 import Text.Pandoc.Writers.Shared
 import Text.Pandoc.Options
-import Text.Pandoc.Readers.TeXMath
 import Text.Printf ( printf )
 import Data.List ( stripPrefix, intersperse, intercalate )
 import Data.Maybe (fromMaybe)
@@ -331,11 +330,6 @@ inlineToMan opts (Cite _ lst) =
 inlineToMan _ (Code _ str) =
   return $ text $ "\\f[C]" ++ escapeCode str ++ "\\f[]"
 inlineToMan _ (Str str) = return $ text $ escapeString str
-inlineToMan opts (Math InlineMath str) =
-  inlineListToMan opts $ texMathToInlines InlineMath str
-inlineToMan opts (Math DisplayMath str) = do
-  contents <- inlineListToMan opts $ texMathToInlines DisplayMath str
-  return $ cr <> text ".RS" $$ contents $$ text ".RE"
 inlineToMan _ (RawInline f str)
   | f == Format "man" = return $ text str
   | otherwise         = return empty

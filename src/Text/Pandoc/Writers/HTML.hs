@@ -35,13 +35,9 @@ import Text.Pandoc.Shared
 import Text.Pandoc.Writers.Shared
 import Text.Pandoc.Options
 import Text.Pandoc.Templates
-import Text.Pandoc.Readers.TeXMath
 import Text.Pandoc.Slides
-import Text.Pandoc.Highlighting ( highlight, styleToCss,
-                                  formatHtmlInline, formatHtmlBlock )
 import Text.Pandoc.XML (fromEntities, escapeStringForXML)
 import Network.URI ( parseURIReference, URI(..), unEscapeString )
-import Network.HTTP ( urlEncode )
 import Numeric ( showHex )
 import Data.Char ( ord, toLower )
 import Data.List ( isPrefixOf, intersperse )
@@ -49,19 +45,10 @@ import Data.String ( fromString )
 import Data.Maybe ( catMaybes, fromMaybe )
 import Control.Monad.State
 import Text.Blaze.Html hiding(contents)
-#if MIN_VERSION_blaze_markup(0,6,3)
-#else
-import Text.Blaze.Internal(preEscapedString)
-#endif
-#if MIN_VERSION_blaze_html(0,5,1)
-import qualified Text.Blaze.XHtml5 as H5
-#else
 import qualified Text.Blaze.Html5 as H5
-#endif
 import qualified Text.Blaze.XHtml1.Transitional as H
 import qualified Text.Blaze.XHtml1.Transitional.Attributes as A
 import Text.Blaze.Renderer.String (renderHtml)
-import Text.TeXMath
 import Text.XML.Light.Output
 import Text.XML.Light (unode, elChildren, unqual)
 import qualified Text.XML.Light as XML
@@ -74,15 +61,13 @@ data WriterState = WriterState
     { stNotes            :: [Html]  -- ^ List of notes
     , stMath             :: Bool    -- ^ Math is used in document
     , stQuotes           :: Bool    -- ^ <q> tag is used
-    , stHighlighting     :: Bool    -- ^ Syntax highlighting is used
     , stSecNum           :: [Int]   -- ^ Number of current section
     , stElement          :: Bool    -- ^ Processing an Element
     }
 
 defaultWriterState :: WriterState
 defaultWriterState = WriterState {stNotes= [], stMath = False, stQuotes = False,
-                                  stHighlighting = False, stSecNum = [],
-                                  stElement = False}
+                                  stSecNum = [], stElement = False}
 
 -- Helpers to render HTML with the appropriate function.
 
@@ -140,47 +125,7 @@ pandocToHtml opts (Pandoc meta blocks) = do
   st <- get
   let notes = reverse (stNotes st)
   let thebody = blocks' >> footnoteSection opts notes
-  let  math = if stMath st
-                then case writerHTMLMathMethod opts of
-                           LaTeXMathML (Just url) ->
-                              H.script ! A.src (toValue url)
-                                       ! A.type_ "text/javascript"
-                                       $ mempty
-                           MathML (Just url) ->
-                              H.script ! A.src (toValue url)
-                                       ! A.type_ "text/javascript"
-                                       $ mempty
-                           MathJax url ->
-                              H.script ! A.src (toValue url)
-                                       ! A.type_ "text/javascript"
-                                       $ case writerSlideVariant opts of
-                                              SlideousSlides ->
-                                                 preEscapedString
-                                                 "MathJax.Hub.Queue([\"Typeset\",MathJax.Hub]);"
-                                              _ -> mempty
-                           JsMath (Just url) ->
-                              H.script ! A.src (toValue url)
-                                       ! A.type_ "text/javascript"
-                                       $ mempty
-                           KaTeX js css ->
-                              (H.script ! A.src (toValue js) $ mempty) <>
-                              (H.link ! A.rel "stylesheet" ! A.href (toValue css)) <>
-                              (H.script ! A.type_ "text/javascript" $ toHtml renderKaTeX)
-                           _ -> case lookup "mathml-script" (writerVariables opts) of
-                                      Just s | not (writerHtml5 opts) ->
-                                        H.script ! A.type_ "text/javascript"
-                                           $ preEscapedString
-                                            ("/*<![CDATA[*/\n" ++ s ++ "/*]]>*/\n")
-                                             | otherwise -> mempty
-                                      Nothing -> mempty
-                else mempty
-  let context =   (if stHighlighting st
-                      then defField "highlighting-css"
-                             (styleToCss $ writerHighlightStyle opts)
-                      else id) $
-                  (if stMath st
-                      then defField "math" (renderHtml math)
-                      else id) $
+  let context =   id $
                   defField "quotes" (stQuotes st) $
                   maybe id (defField "toc" . renderHtml) toc $
                   defField "author-meta" authsMeta $
@@ -460,11 +405,6 @@ blockToHtml opts (Div attr@(_,classes,_) bs) = do
         else addAttrs opts attr $ H.div $ contents'
 blockToHtml opts (RawBlock f str)
   | f == Format "html" = return $ preEscapedString str
-  | f == Format "latex" =
-      case writerHTMLMathMethod opts of
-           MathJax _  -> do modify (\st -> st{ stMath = True })
-                            return $ toHtml str
-           _          -> return mempty
   | otherwise          = return mempty
 blockToHtml opts (HorizontalRule) = return $ if writerHtml5 opts then H5.hr else H.hr
 blockToHtml opts (CodeBlock (id',classes,keyvals) rawCode) = do
@@ -479,14 +419,10 @@ blockToHtml opts (CodeBlock (id',classes,keyvals) rawCode) = do
       adjCode  = if tolhs
                     then unlines . map ("> " ++) . lines $ rawCode
                     else rawCode
-      hlCode   = if writerHighlight opts -- check highlighting options
-                    then highlight formatHtmlBlock (id',classes',keyvals) adjCode
-                    else Nothing
-  case hlCode of
-         Nothing -> return $ addAttrs opts (id',classes,keyvals)
-                           $ H.pre $ H.code $ toHtml adjCode
-         Just  h -> modify (\st -> st{ stHighlighting = True }) >>
-                    return (addAttrs opts (id',[],keyvals) h)
+
+  return $ addAttrs opts (id',classes,keyvals)
+         $ H.pre $ H.code $ toHtml adjCode
+
 blockToHtml opts (BlockQuote blocks) =
   -- in S5, treat list in blockquote specially
   -- if default is incremental, make it nonincremental;
@@ -642,20 +578,6 @@ inlineListToHtml :: WriterOptions -> [Inline] -> State WriterState Html
 inlineListToHtml opts lst =
   mapM (inlineToHtml opts) lst >>= return . mconcat
 
--- | Annotates a MathML expression with the tex source
-annotateMML :: XML.Element -> String -> XML.Element
-annotateMML e tex = math (unode "semantics" [cs, unode "annotation" (annotAttrs, tex)])
-  where
-    cs = case elChildren e of
-          [] -> unode "mrow" ()
-          [x] -> x
-          xs -> unode "mrow" xs
-    math childs = XML.Element q as [XML.Elem childs] l
-      where
-        (XML.Element q as _ l) = e
-    annotAttrs = [XML.Attr (unqual "encoding") "application/x-tex"]
-
-
 -- | Convert Pandoc inline element to HTML.
 inlineToHtml :: WriterOptions -> Inline -> State WriterState Html
 inlineToHtml opts inline =
@@ -682,17 +604,8 @@ inlineToHtml opts inline =
                                          | "csl-no-smallcaps" `elem` classes]
     (Emph lst)       -> inlineListToHtml opts lst >>= return . H.em
     (Strong lst)     -> inlineListToHtml opts lst >>= return . H.strong
-    (Code attr str)  -> case hlCode of
-                             Nothing -> return
-                                        $ addAttrs opts attr
-                                        $ H.code $ strToHtml str
-                             Just  h -> do
-                               modify $ \st -> st{ stHighlighting = True }
-                               return $ addAttrs opts (id',[],keyvals) h
-                        where (id',_,keyvals) = attr
-                              hlCode = if writerHighlight opts
-                                          then highlight formatHtmlInline attr str
-                                          else Nothing
+    (Code attr str)  -> return $ addAttrs opts attr $ H.code $ strToHtml str
+
     (Strikeout lst)  -> inlineListToHtml opts lst >>=
                         return . H.del
     (SmallCaps lst)   -> inlineListToHtml opts lst >>=
@@ -711,73 +624,7 @@ inlineToHtml opts inline =
                                  H.q `fmap` inlineListToHtml opts lst
                                else (\x -> leftQuote >> x >> rightQuote)
                                     `fmap` inlineListToHtml opts lst
-    (Math t str) -> do
-      modify (\st -> st {stMath = True})
-      let mathClass = toValue $ ("math " :: String) ++
-                      if t == InlineMath then "inline" else "display"
-      case writerHTMLMathMethod opts of
-           LaTeXMathML _ ->
-              -- putting LaTeXMathML in container with class "LaTeX" prevents
-              -- non-math elements on the page from being treated as math by
-              -- the javascript
-              return $ H.span ! A.class_ "LaTeX" $
-                     case t of
-                       InlineMath  -> toHtml ("$" ++ str ++ "$")
-                       DisplayMath -> toHtml ("$$" ++ str ++ "$$")
-           JsMath _ -> do
-              let m = preEscapedString str
-              return $ case t of
-                       InlineMath -> H.span ! A.class_ mathClass $ m
-                       DisplayMath -> H.div ! A.class_ mathClass $ m
-           WebTeX url -> do
-              let imtag = if writerHtml5 opts then H5.img else H.img
-              let m = imtag ! A.style "vertical-align:middle"
-                            ! A.src (toValue $ url ++ urlEncode str)
-                            ! A.alt (toValue str)
-                            ! A.title (toValue str)
-              let brtag = if writerHtml5 opts then H5.br else H.br
-              return $ case t of
-                        InlineMath  -> m
-                        DisplayMath -> brtag >> m >> brtag
-           GladTeX ->
-              return $ case t of
-                         InlineMath -> preEscapedString $ "<EQ ENV=\"math\">" ++ str ++ "</EQ>"
-                         DisplayMath -> preEscapedString $ "<EQ ENV=\"displaymath\">" ++ str ++ "</EQ>"
-           MathML _ -> do
-              let dt = if t == InlineMath
-                          then DisplayInline
-                          else DisplayBlock
-              let conf = useShortEmptyTags (const False)
-                           defaultConfigPP
-              case writeMathML dt <$> readTeX str of
-                    Right r  -> return $ preEscapedString $
-                        ppcElement conf (annotateMML r str)
-                    Left _   -> inlineListToHtml opts
-                        (texMathToInlines t str) >>=
-                        return .  (H.span ! A.class_ mathClass)
-           MathJax _ -> return $ H.span ! A.class_ mathClass $ toHtml $
-              case t of
-                InlineMath  -> "\\(" ++ str ++ "\\)"
-                DisplayMath -> "\\[" ++ str ++ "\\]"
-           KaTeX _ _ -> return $ H.span ! A.class_ mathClass $
-              toHtml (case t of
-                        InlineMath -> str
-                        DisplayMath -> "\\displaystyle " ++ str)
-           PlainMath -> do
-              x <- inlineListToHtml opts (texMathToInlines t str)
-              let m = H.span ! A.class_ mathClass $ x
-              let brtag = if writerHtml5 opts then H5.br else H.br
-              return  $ case t of
-                         InlineMath  -> m
-                         DisplayMath -> brtag >> m >> brtag 
     (RawInline f str)
-      | f == Format "latex" ->
-                          case writerHTMLMathMethod opts of
-                               LaTeXMathML _ -> do modify (\st -> st {stMath = True})
-                                                   return $ toHtml str
-                               MathJax _     -> do modify (\st -> st {stMath = True})
-                                                   return $ toHtml str
-                               _             -> return mempty
       | f == Format "html" -> return $ preEscapedString str
       | otherwise          -> return mempty
     (Link txt (s,_)) | "mailto:" `isPrefixOf` s -> do

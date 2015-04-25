@@ -74,14 +74,6 @@ module Text.Pandoc.Shared (
                      makeMeta,
                      -- * TagSoup HTML handling
                      renderTags',
-                     -- * File handling
-                     inDirectory,
-                     readDataFile,
-                     readDataFileUTF8,
-                     fetchItem,
-                     fetchItem',
-                     openURL,
-                     collapseFilePath,
                      -- * Error handling
                      err,
                      warn,
@@ -89,8 +81,7 @@ module Text.Pandoc.Shared (
                      hush,
                      -- * Safe read
                      safeRead,
-                     -- * Temp directory
-                     withTempDir
+                     urlEncode
                     ) where
 
 import Text.Pandoc.Definition
@@ -102,7 +93,7 @@ import qualified Text.Pandoc.UTF8 as UTF8
 import System.Environment (getProgName)
 import System.Exit (exitWith, ExitCode(..))
 import Data.Char ( toLower, isLower, isUpper, isAlpha,
-                   isLetter, isDigit, isSpace )
+                   isLetter, isDigit, isSpace, isAscii, isAlphaNum )
 import Data.List ( find, stripPrefix, intercalate )
 import qualified Data.Map as M
 import Network.URI ( escapeURIString, isURI, nonStrictRelativeTo,
@@ -117,10 +108,8 @@ import qualified Control.Monad.State as S
 import qualified Control.Exception as E
 import Control.Monad (msum, unless, MonadPlus(..))
 import Text.Pandoc.Pretty (charWidth)
-import Text.Pandoc.Compat.Locale (defaultTimeLocale)
 import Data.Time
 import System.IO (stderr)
-import System.IO.Temp
 import Text.HTML.TagSoup (renderTagsOptions, RenderOptions(..), Tag(..),
          renderOptions)
 import qualified Data.ByteString as BS
@@ -131,26 +120,8 @@ import Data.Sequence (ViewR(..), ViewL(..), viewl, viewr)
 import qualified Data.Text as T (toUpper, pack, unpack)
 import Data.ByteString.Lazy (toChunks)
 
-#ifdef EMBED_DATA_FILES
 import Text.Pandoc.Data (dataFiles)
-#else
-import Paths_pandoc (getDataFileName)
-#endif
-#ifdef HTTP_CLIENT
-import Network.HTTP.Client (httpLbs, parseUrl, withManager,
-                            responseBody, responseHeaders,
-                            Request(port,host))
-import Network.HTTP.Client.Internal (addProxy)
-import Network.HTTP.Client.TLS (tlsManagerSettings)
-import System.Environment (getEnv)
-import Network.HTTP.Types.Header ( hContentType)
-import Network (withSocketsDo)
-#else
 import Network.URI (parseURI)
-import Network.HTTP (findHeader, rspBody,
-                     RequestMethod(..), HeaderName(..), mkRequest)
-import Network.Browser (browse, setAllowRedirects, setOutHandler, request)
-#endif
 
 --
 -- List processing
@@ -732,116 +703,6 @@ renderTags' = renderTagsOptions
               where matchTags = \tags -> flip elem tags . map toLower
 
 --
--- File handling
---
-
--- | Perform an IO action in a directory, returning to starting directory.
-inDirectory :: FilePath -> IO a -> IO a
-inDirectory path action = E.bracket
-                             getCurrentDirectory
-                             setCurrentDirectory
-                             (const $ setCurrentDirectory path >> action)
-
-readDefaultDataFile :: FilePath -> IO BS.ByteString
-readDefaultDataFile fname =
-#ifdef EMBED_DATA_FILES
-  case lookup (makeCanonical fname) dataFiles of
-    Nothing       -> err 97 $ "Could not find data file " ++ fname
-    Just contents -> return contents
-  where makeCanonical = joinPath . transformPathParts . splitDirectories
-        transformPathParts = reverse . foldl go []
-        go as     "."  = as
-        go (_:as) ".." = as
-        go as     x    = x : as
-#else
-  getDataFileName ("data" </> fname) >>= checkExistence >>= BS.readFile
-   where checkExistence fn = do
-           exists <- doesFileExist fn
-           if exists
-              then return fn
-              else err 97 ("Could not find data file " ++ fname)
-#endif
-
--- | Read file from specified user data directory or, if not found there, from
--- Cabal data directory.
-readDataFile :: Maybe FilePath -> FilePath -> IO BS.ByteString
-readDataFile Nothing fname = readDefaultDataFile fname
-readDataFile (Just userDir) fname = do
-  exists <- doesFileExist (userDir </> fname)
-  if exists
-     then BS.readFile (userDir </> fname)
-     else readDefaultDataFile fname
-
--- | Same as 'readDataFile' but returns a String instead of a ByteString.
-readDataFileUTF8 :: Maybe FilePath -> FilePath -> IO String
-readDataFileUTF8 userDir fname =
-  UTF8.toString `fmap` readDataFile userDir fname
-
--- | Fetch an image or other item from the local filesystem or the net.
--- Returns raw content and maybe mime type.
-fetchItem :: Maybe String -> String
-          -> IO (Either E.SomeException (BS.ByteString, Maybe MimeType))
-fetchItem sourceURL s =
-  case (sourceURL >>= parseURIReference . ensureEscaped, ensureEscaped s) of
-       (_, s') | isURI s'  -> openURL s'
-       (Just u, s') -> -- try fetching from relative path at source
-          case parseURIReference s' of
-               Just u' -> openURL $ show $ u' `nonStrictRelativeTo` u
-               Nothing -> openURL s' -- will throw error
-       (Nothing, _) -> E.try readLocalFile -- get from local file system
-  where readLocalFile = do
-          cont <- BS.readFile fp
-          return (cont, mime)
-        dropFragmentAndQuery = takeWhile (\c -> c /= '?' && c /= '#')
-        fp = unEscapeString $ dropFragmentAndQuery s
-        mime = case takeExtension fp of
-                    ".gz" -> getMimeType $ dropExtension fp
-                    x     -> getMimeType x
-        ensureEscaped x@(_:':':'\\':_) = x -- likely windows path
-        ensureEscaped x = escapeURIString isAllowedInURI x
-
--- | Like 'fetchItem', but also looks for items in a 'MediaBag'.
-fetchItem' :: MediaBag -> Maybe String -> String
-           -> IO (Either E.SomeException (BS.ByteString, Maybe MimeType))
-fetchItem' media sourceURL s = do
-  case lookupMedia s media of
-       Nothing -> fetchItem sourceURL s
-       Just (mime, bs) -> return $ Right (BS.concat $ toChunks bs, Just mime)
-
--- | Read from a URL and return raw data and maybe mime type.
-openURL :: String -> IO (Either E.SomeException (BS.ByteString, Maybe MimeType))
-openURL u
-  | Just u' <- stripPrefix "data:" u =
-    let mime     = takeWhile (/=',') u'
-        contents = B8.pack $ unEscapeString $ drop 1 $ dropWhile (/=',') u'
-    in  return $ Right (decodeLenient contents, Just mime)
-#ifdef HTTP_CLIENT
-  | otherwise = withSocketsDo $ E.try $ do
-     req <- parseUrl u
-     (proxy :: Either E.SomeException String) <- E.try $ getEnv "http_proxy"
-     let req' = case proxy of
-                     Left _   -> req
-                     Right pr -> case parseUrl pr of
-                                      Just r  -> addProxy (host r) (port r) req
-                                      Nothing -> req
-     resp <- withManager tlsManagerSettings $ httpLbs req'
-     return (BS.concat $ toChunks $ responseBody resp,
-             UTF8.toString `fmap` lookup hContentType (responseHeaders resp))
-#else
-  | otherwise = E.try $ getBodyAndMimeType `fmap` browse
-              (do S.liftIO $ UTF8.hPutStrLn stderr $ "Fetching " ++ u ++ "..."
-                  setOutHandler $ const (return ())
-                  setAllowRedirects True
-                  request (getRequest' u'))
-  where getBodyAndMimeType (_, r) = (rspBody r, findHeader HdrContentType r)
-        getRequest' uriString = case parseURI uriString of
-                                   Nothing -> error ("Not a valid URL: " ++
-                                                        uriString)
-                                   Just v  -> mkRequest GET v
-        u' = escapeURIString (/= '|') u  -- pipes are rejected by Network.URI
-#endif
-
---
 -- Error reporting
 --
 
@@ -865,30 +726,6 @@ hush :: Either a b -> Maybe b
 hush (Left _) = Nothing
 hush (Right x) = Just x
 
--- | Remove intermediate "." and ".." directories from a path.
---
--- > collapseFilePath "./foo" == "foo"
--- > collapseFilePath "/bar/../baz" == "/baz"
--- > collapseFilePath "/../baz" == "/../baz"
--- > collapseFilePath "parent/foo/baz/../bar" ==  "parent/foo/bar"
--- > collapseFilePath "parent/foo/baz/../../bar" ==  "parent/bar"
--- > collapseFilePath "parent/foo/.." ==  "parent"
--- > collapseFilePath "/parent/foo/../../bar" ==  "/bar"
-collapseFilePath :: FilePath -> FilePath
-collapseFilePath = joinPath . reverse . foldl go [] . splitDirectories
-  where
-    go rs "." = rs
-    go r@(p:rs) ".." = case p of
-                            ".." -> ("..":r)
-                            (checkPathSeperator -> Just True) -> ("..":r)
-                            _ -> rs
-    go _ (checkPathSeperator -> Just True) = [[pathSeparator]]
-    go rs x = x:rs
-    isSingleton [] = Nothing
-    isSingleton [x] = Just x
-    isSingleton _ = Nothing
-    checkPathSeperator = fmap isPathSeparator . isSingleton
-
 --
 -- Safe read
 --
@@ -899,14 +736,24 @@ safeRead s = case reads s of
                     | all isSpace x -> return d
                   _                 -> mzero
 
---
--- Temp directory
---
 
-withTempDir :: String -> (FilePath -> IO a) -> IO a
-withTempDir =
-#ifdef _WINDOWS
-  withTempDirectory "."
-#else
-  withSystemTempDirectory
-#endif
+urlEncode :: String -> String
+urlEncode     [] = []
+urlEncode (ch:t)
+  | (isAscii ch && isAlphaNum ch) || ch `elem` "-_.~" = ch : urlEncode t
+  | not (isAscii ch) = foldr escape (urlEncode t) (eightBs [] (fromEnum ch))
+  | otherwise = escape (fromEnum ch) (urlEncode t)
+    where
+     escape b rs = '%':showH (b `div` 16) (showH (b `mod` 16) rs)
+
+     showH x xs
+       | x <= 9    = toEnum (o_0 + x) : xs
+       | otherwise = toEnum (o_A + (x-10)) : xs
+      where
+       o_0 = fromEnum '0'
+       o_A = fromEnum 'A'
+
+     eightBs :: [Int]  -> Int -> [Int]
+     eightBs acc x
+      | x <= 0xff = (x:acc)
+      | otherwise = eightBs ((x `mod` 256) : acc) (x `div` 256)

@@ -47,9 +47,7 @@ import Control.Applicative ((<|>))
 import Control.Monad.State
 import Text.Pandoc.Pretty
 import Text.Pandoc.Slides
-import Text.Pandoc.Highlighting (highlight, styleToLaTeX,
-                                 formatLaTeXInline, formatLaTeXBlock,
-                                 toListingsLanguage)
+import Text.Pandoc.Highlighting (toListingsLanguage)
 
 data WriterState =
   WriterState { stInNote        :: Bool          -- true if we're in a note
@@ -67,7 +65,6 @@ data WriterState =
               , stLHS           :: Bool          -- true if document has literate haskell code
               , stBook          :: Bool          -- true if document uses book or memoir class
               , stCsquotes      :: Bool          -- true if document uses csquotes
-              , stHighlighting  :: Bool          -- true if document has highlighted code
               , stIncremental   :: Bool          -- true if beamer lists should be displayed bit by bit
               , stInternalLinks :: [String]      -- list of internal link targets
               , stUsesEuro      :: Bool          -- true if euro symbol used
@@ -84,7 +81,7 @@ writeLaTeX options document =
                 stTable = False, stStrikeout = False,
                 stUrl = False, stGraphics = False,
                 stLHS = False, stBook = writerChapters options,
-                stCsquotes = False, stHighlighting = False,
+                stCsquotes = False,
                 stIncremental = writerIncremental options,
                 stInternalLinks = [], stUsesEuro = False }
 
@@ -163,10 +160,7 @@ pandocToLaTeX options (Pandoc meta blocks) = do
                   defField "beamer" (writerBeamer options) $
                   defField "mainlang" (maybe "" (reverse . takeWhile (/=',') . reverse)
                                 (lookup "lang" $ writerVariables options)) $
-                  (if stHighlighting st
-                      then defField "highlighting-macros" (styleToLaTeX
-                                $ writerHighlightStyle options )
-                      else id) $
+                  id $
                   (case writerCiteMethod options of
                          Natbib   -> defField "biblio-title" biblioTitle .
                                      defField "natbib" True
@@ -395,16 +389,10 @@ blockToLaTeX (CodeBlock (identifier,classes,keyvalAttr) str) = do
                 | otherwise   = brackets $ hcat (intersperse ", " (map text params))
         return $ flush ("\\begin{lstlisting}" <> printParams $$ text str $$
                  "\\end{lstlisting}") $$ cr
-  let highlightedCodeBlock =
-        case highlight formatLaTeXBlock ("",classes,keyvalAttr) str of
-               Nothing -> rawCodeBlock
-               Just  h -> modify (\st -> st{ stHighlighting = True }) >>
-                          return (flush $ linkAnchor $$ text h)
   case () of
      _ | isEnabled Ext_literate_haskell opts && "haskell" `elem` classes &&
          "literate" `elem` classes                      -> lhsCodeBlock
        | writerListings opts                            -> listingsCodeBlock
-       | writerHighlight opts && not (null classes)     -> highlightedCodeBlock
        | otherwise                                      -> rawCodeBlock
 blockToLaTeX (RawBlock f x)
   | f == Format "latex" || f == Format "tex"
@@ -755,7 +743,6 @@ inlineToLaTeX (Code (_,classes,_) str) = do
   inHeading <- gets stInHeading
   case () of
      _ | writerListings opts  && not inHeading      -> listingsCode
-       | writerHighlight opts && not (null classes) -> highlightCode
        | otherwise                                  -> rawCode
    where listingsCode = do
            inNote <- gets stInNote
@@ -764,11 +751,6 @@ inlineToLaTeX (Code (_,classes,_) str) = do
                           (c:_) -> c
                           []    -> '!'
            return $ text $ "\\lstinline" ++ [chr] ++ str ++ [chr]
-         highlightCode = do
-           case highlight formatLaTeXInline ("",classes,[]) str of
-                  Nothing -> rawCode
-                  Just  h -> modify (\st -> st{ stHighlighting = True }) >>
-                             return (text h)
          rawCode = liftM (text . (\s -> "\\texttt{" ++ escapeSpaces s ++ "}"))
                           $ stringToLaTeX CodeString str
            where

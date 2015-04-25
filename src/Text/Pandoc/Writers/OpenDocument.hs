@@ -34,7 +34,6 @@ import Text.Pandoc.Definition
 import Text.Pandoc.Options
 import Text.Pandoc.XML
 import Text.Pandoc.Templates (renderTemplate')
-import Text.Pandoc.Readers.TeXMath
 import Text.Pandoc.Pretty
 import Text.Printf ( printf )
 import Control.Applicative ( (<$>) )
@@ -388,7 +387,6 @@ inlineToOpenDocument o ils
     | SmallCaps   l <- ils = withTextStyle SmallC $ inlinesToOpenDocument o l
     | Quoted    t l <- ils = inQuotes t <$> inlinesToOpenDocument o l
     | Code      _ s <- ils = withTextStyle Pre $ inTextStyle $ preformatted s
-    | Math      t s <- ils = inlinesToOpenDocument o (texMathToInlines t s)
     | Cite      _ l <- ils = inlinesToOpenDocument o l
     | RawInline f s <- ils = if f == Format "opendocument"
                                 then return $ text s

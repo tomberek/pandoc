@@ -28,62 +28,13 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 Exports functions for syntax highlighting.
 -}
 
-module Text.Pandoc.Highlighting ( languages
-                                , languagesByExtension
-                                , highlight
-                                , formatLaTeXInline
-                                , formatLaTeXBlock
-                                , styleToLaTeX
-                                , formatHtmlInline
-                                , formatHtmlBlock
-                                , styleToCss
-                                , pygments
-                                , espresso
-                                , zenburn
-                                , tango
-                                , kate
-                                , monochrome
-                                , haddock
-                                , Style
-                                , fromListingsLanguage
+module Text.Pandoc.Highlighting ( fromListingsLanguage
                                 , toListingsLanguage
                                 ) where
 import Text.Pandoc.Definition
-import Text.Pandoc.Shared (safeRead)
-import Text.Highlighting.Kate
-import Data.List (find)
-import Data.Maybe (fromMaybe)
 import Data.Char (toLower)
 import qualified Data.Map as M
 import Control.Applicative ((<|>))
-
-lcLanguages :: [String]
-lcLanguages = map (map toLower) languages
-
-highlight :: (FormatOptions -> [SourceLine] -> a) -- ^ Formatter
-          -> Attr   -- ^ Attributes of the CodeBlock
-          -> String -- ^ Raw contents of the CodeBlock
-          -> Maybe a -- ^ Maybe the formatted result
-highlight formatter (_, classes, keyvals) rawCode =
-  let firstNum = case safeRead (fromMaybe "1" $ lookup "startFrom" keyvals) of
-                      Just n  -> n
-                      Nothing -> 1
-      fmtOpts = defaultFormatOpts{
-                  startNumber = firstNum,
-                  numberLines = any (`elem`
-                        ["number","numberLines", "number-lines"]) classes }
-      lcclasses = map (map toLower) classes
-  in  case find (`elem` lcLanguages) lcclasses of
-            Nothing
-              | numberLines fmtOpts -> Just
-                              $ formatter fmtOpts{ codeClasses = [],
-                                                   containerClasses = classes }
-                              $ map (\ln -> [(NormalTok, ln)]) $ lines rawCode
-              | otherwise  -> Nothing
-            Just language  -> Just
-                              $ formatter fmtOpts{ codeClasses = [language],
-                                                   containerClasses = classes }
-                              $ highlightAs language rawCode
 
 -- Functions for correlating latex listings package's language names
 -- with highlighting-kate language names:

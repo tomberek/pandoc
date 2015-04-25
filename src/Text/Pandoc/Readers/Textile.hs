@@ -58,7 +58,7 @@ import Text.Pandoc.Options
 import Text.Pandoc.Parsing
 import Text.Pandoc.Readers.HTML ( htmlTag, isBlockTag )
 import Text.Pandoc.Shared (trim)
-import Text.Pandoc.Readers.LaTeX ( rawLaTeXInline, rawLaTeXBlock )
+import Text.Pandoc.Readers.LaTeX ( rawLaTeXBlock )
 import Text.HTML.TagSoup (parseTags, innerText, fromAttrib, Tag(..))
 import Text.HTML.TagSoup.Match
 import Data.List ( intercalate )
@@ -391,7 +391,6 @@ inlineParsers = [ str
                 , inlineMarkup
                 , groupedInlineMarkup
                 , rawHtmlInline
-                , rawLaTeXInline'
                 , note
                 , link
                 , image
@@ -504,12 +503,6 @@ endline = try $ do
 
 rawHtmlInline :: Parser [Char] ParserState Inlines
 rawHtmlInline = B.rawInline "html" . snd <$> htmlTag (const True)
-
--- | Raw LaTeX Inline
-rawLaTeXInline' :: Parser [Char] ParserState Inlines
-rawLaTeXInline' = try $ do
-  guardEnabled Ext_raw_tex
-  B.singleton <$> rawLaTeXInline
 
 -- | Textile standard link syntax is "label":target. But we
 -- can also have ["label":target].

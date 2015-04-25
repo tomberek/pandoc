@@ -51,8 +51,6 @@ module Text.Pandoc.Parsing ( anyLine,
                              romanNumeral,
                              emailAddress,
                              uri,
-                             mathInline,
-                             mathDisplay,
                              withHorizDisplacement,
                              withRaw,
                              escaped,
@@ -76,7 +74,6 @@ module Text.Pandoc.Parsing ( anyLine,
                              HasReaderOptions (..),
                              HasHeaderMap (..),
                              HasIdentifierList (..),
-                             HasMacros (..),
                              HasLastStrPosition (..),
                              defaultParserState,
                              HeaderType (..),
@@ -100,8 +97,6 @@ module Text.Pandoc.Parsing ( anyLine,
                              dash,
                              nested,
                              citeKey,
-                             macro,
-                             applyMacros',
                              Parser,
                              ParserT,
                              F(..),
@@ -181,8 +176,6 @@ import Data.Char ( toLower, toUpper, ord, chr, isAscii, isAlphaNum,
 import Data.List ( intercalate, transpose )
 import Text.Pandoc.Shared
 import qualified Data.Map as M
-import Text.TeXMath.Readers.TeX.Macros (applyMacros, Macro,
-                                        parseMacroDefinitions)
 import Text.Pandoc.Compat.TagSoupEntity ( lookupEntity )
 import Text.Pandoc.Asciify (toAsciiChar)
 import Data.Default
@@ -473,65 +466,6 @@ uri = try $ do
   str' <- option str $ char '/' >> return (str ++ "/")
   let uri' = scheme ++ ":" ++ fromEntities str'
   return (uri', escapeURI uri')
-
-mathInlineWith :: Stream s m Char  => String -> String -> ParserT s st m String
-mathInlineWith op cl = try $ do
-  string op
-  notFollowedBy space
-  words' <- many1Till (count 1 (noneOf " \t\n\\")
-                   <|> (char '\\' >>
-                           -- This next clause is needed because \text{..} can
-                           -- contain $, \(\), etc.
-                           (try (string "text" >>
-                                 (("\\text" ++) <$> inBalancedBraces 0 ""))
-                            <|>  (\c -> ['\\',c]) <$> anyChar))
-                   <|> do (blankline <* notFollowedBy' blankline) <|>
-                             (oneOf " \t" <* skipMany (oneOf " \t"))
-                          notFollowedBy (char '$')
-                          return " "
-                    ) (try $ string cl)
-  notFollowedBy digit  -- to prevent capture of $5
-  return $ concat words'
- where
-  inBalancedBraces :: Stream s m Char => Int -> String -> ParserT s st m String
-  inBalancedBraces 0 "" = do
-    c <- anyChar
-    if c == '{'
-       then inBalancedBraces 1 "{"
-       else mzero
-  inBalancedBraces 0 s = return $ reverse s
-  inBalancedBraces numOpen ('\\':xs) = do
-    c <- anyChar
-    inBalancedBraces numOpen (c:'\\':xs)
-  inBalancedBraces numOpen xs = do
-    c <- anyChar
-    case c of
-         '}' -> inBalancedBraces (numOpen - 1) (c:xs)
-         '{' -> inBalancedBraces (numOpen + 1) (c:xs)
-         _   -> inBalancedBraces numOpen (c:xs)
-
-mathDisplayWith :: Stream s m Char => String -> String -> ParserT s st m String
-mathDisplayWith op cl = try $ do
-  string op
-  many1Till (noneOf "\n" <|> (newline <* notFollowedBy' blankline)) (try $ string cl)
-
-mathDisplay :: (HasReaderOptions st, Stream s m Char)
-            => ParserT s st m String
-mathDisplay =
-      (guardEnabled Ext_tex_math_dollars >> mathDisplayWith "$$" "$$")
-  <|> (guardEnabled Ext_tex_math_single_backslash >>
-       mathDisplayWith "\\[" "\\]")
-  <|> (guardEnabled Ext_tex_math_double_backslash >>
-       mathDisplayWith "\\\\[" "\\\\]")
-
-mathInline :: (HasReaderOptions st , Stream s m Char)
-           => ParserT s st m String
-mathInline =
-      (guardEnabled Ext_tex_math_dollars >> mathInlineWith "$" "$")
-  <|> (guardEnabled Ext_tex_math_single_backslash >>
-       mathInlineWith "\\(" "\\)")
-  <|> (guardEnabled Ext_tex_math_double_backslash >>
-       mathInlineWith "\\\\(" "\\\\)")
 
 -- | Applies a parser, returns tuple of its results and its horizontal
 -- displacement (the difference between the source column at the end
@@ -915,7 +849,6 @@ data ParserState = ParserState
       stateNextExample     :: Int,           -- ^ Number of next example
       stateExamples        :: M.Map String Int, -- ^ Map from example labels to numbers
       stateHasChapters     :: Bool,          -- ^ True if \chapter encountered
-      stateMacros          :: [Macro],       -- ^ List of macros defined so far
       stateRstDefaultRole  :: String,        -- ^ Current rST default interpreted text role
       stateRstCustomRoles  :: M.Map String (String, Maybe String, Attr), -- ^ Current rST custom text roles
       -- Triple represents: 1) Base role, 2) Optional format (only for :raw:
@@ -976,13 +909,6 @@ instance HasIdentifierList ParserState where
   extractIdentifierList     = stateIdentifiers
   updateIdentifierList f st = st{ stateIdentifiers = f $ stateIdentifiers st }
 
-class HasMacros st where
-  extractMacros         :: st -> [Macro]
-  updateMacros          :: ([Macro] -> [Macro]) -> st -> st
-
-instance HasMacros ParserState where
-  extractMacros        = stateMacros
-  updateMacros f st    = st{ stateMacros = f $ stateMacros st }
 
 class HasLastStrPosition st where
   setLastStrPos  :: SourcePos -> st -> st
@@ -1012,7 +938,6 @@ defaultParserState =
                   stateNextExample     = 1,
                   stateExamples        = M.empty,
                   stateHasChapters     = False,
-                  stateMacros          = [],
                   stateRstDefaultRole  = "title-reference",
                   stateRstCustomRoles  = M.empty,
                   stateCaption         = Nothing,
@@ -1224,33 +1149,6 @@ token pp pos match = tokenPrim pp (\_ t _ -> pos t) match
 --
 -- Macros
 --
-
--- | Parse a \newcommand or \renewcommand macro definition.
-macro :: (Stream [Char] m Char, HasMacros st, HasReaderOptions st)
-      => ParserT [Char] st m Blocks
-macro = do
-  apply <- getOption readerApplyMacros
-  inp <- getInput
-  case parseMacroDefinitions inp of
-       ([], _)    -> mzero
-       (ms, rest) -> do def' <- count (length inp - length rest) anyChar
-                        if apply
-                           then do
-                             updateState $ \st ->
-                               updateMacros (ms ++) st
-                             return mempty
-                           else return $ rawBlock "latex" def'
-
--- | Apply current macros to string.
-applyMacros' :: (HasReaderOptions st, HasMacros st, Stream [Char] m Char)
-             => String
-             -> ParserT [Char] st m String
-applyMacros' target = do
-  apply <- getOption readerApplyMacros
-  if apply
-     then do macros <- extractMacros <$> getState
-             return $ applyMacros macros target
-     else return target
 
 -- | Append a warning to the log.
 addWarning :: Maybe SourcePos -> String -> Parser [Char] ParserState ()

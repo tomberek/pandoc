@@ -40,11 +40,7 @@ import           Text.Pandoc.Parsing hiding ( F, unF, askF, asksF, runF
                                             , newline, orderedListMarker
                                             , parseFromString, blanklines
                                             )
-import           Text.Pandoc.Readers.LaTeX (inlineCommand, rawLaTeXInline)
-import           Text.Pandoc.Shared (compactify', compactify'DL)
-import           Text.TeXMath (readTeX, writePandoc, DisplayType(..))
-import qualified Text.TeXMath.Readers.MathML.EntityMap as MathMLEntityMap
-
+import           Text.Pandoc.Shared (compactify', compactify'DL, urlEncode)
 import           Control.Applicative ( Applicative, pure
                                      , (<$>), (<$), (<*>), (<*), (*>) )
 import           Control.Arrow (first)
@@ -56,7 +52,6 @@ import           Data.List (intersperse, isPrefixOf, isSuffixOf)
 import qualified Data.Map as M
 import           Data.Maybe (fromMaybe, isJust)
 import           Data.Monoid (Monoid, mconcat, mempty, mappend)
-import           Network.HTTP (urlEncode)
 
 import           Text.Pandoc.Error
 
@@ -974,7 +969,6 @@ inline =
          , verbatim
          , subscript
          , superscript
-         , inlineLaTeX
          , smart
          , symbol
          ] <* (guard =<< newlinesCountWithinLimits)
@@ -1022,7 +1016,7 @@ endline = try $ do
   decEmphasisNewlinesCount
   guard =<< newlinesCountWithinLimits
   updateLastPreCharPos
-  return . return $ B.space
+  return . return $ B.linebreak  -- Modified to force linebreaks
 
 cite :: OrgParser (F Inlines)
 cite = try $ do
@@ -1467,41 +1461,8 @@ simpleSubOrSuperString = try $
                    <*> many1 alphaNum
          ]
 
-inlineLaTeX :: OrgParser (F Inlines)
-inlineLaTeX = try $ do
-  cmd <- inlineLaTeXCommand
-  maybe mzero returnF $
-     parseAsMath cmd `mplus` parseAsMathMLSym cmd `mplus` parseAsInlineLaTeX cmd
- where
-   parseAsMath :: String -> Maybe Inlines
-   parseAsMath cs = B.fromList <$> texMathToPandoc cs
-
-   parseAsInlineLaTeX :: String -> Maybe Inlines
-   parseAsInlineLaTeX cs = maybeRight $ runParser inlineCommand state "" cs
-
-   parseAsMathMLSym :: String -> Maybe Inlines
-   parseAsMathMLSym cs = B.str <$> MathMLEntityMap.getUnicode (clean cs)
-    -- dropWhileEnd would be nice here, but it's not available before base 4.5
-    where clean = reverse . dropWhile (`elem` ("{}" :: String)) . reverse . drop 1
-
-   state :: ParserState
-   state = def{ stateOptions = def{ readerParseRaw = True }}
-
-   texMathToPandoc inp = (maybeRight $ readTeX inp) >>=
-                         writePandoc DisplayInline
-
 maybeRight :: Either a b -> Maybe b
 maybeRight = either (const Nothing) Just
-
-inlineLaTeXCommand :: OrgParser String
-inlineLaTeXCommand = try $ do
-  rest <- getInput
-  case runParser rawLaTeXInline def "source" rest of
-    Right (RawInline _ cs) -> do
-      let len = length cs
-      count len anyChar
-      return cs
-    _ -> mzero
 
 smart :: OrgParser (F Inlines)
 smart = do

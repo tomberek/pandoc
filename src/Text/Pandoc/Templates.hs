@@ -109,15 +109,11 @@ import qualified Data.Map as M
 import qualified Data.HashMap.Strict as H
 import Data.Foldable (toList)
 import qualified Control.Exception.Extensible as E (try, IOException)
-#if MIN_VERSION_blaze_html(0,5,0)
 import Text.Blaze.Html (Html)
 import Text.Blaze.Internal (preEscapedText)
-#else
-import Text.Blaze (preEscapedText, Html)
-#endif
 import Data.ByteString.Lazy (ByteString, fromChunks)
-import Text.Pandoc.Shared (readDataFileUTF8, ordNub)
 import Data.Vector ((!?))
+import Text.Pandoc.Shared (ordNub)
 
 -- | Get default template for the specified writer.
 getDefaultTemplate :: (Maybe FilePath) -- ^ User data directory to search first
@@ -136,8 +132,6 @@ getDefaultTemplate user writer = do
        "markdown_github"   -> getDefaultTemplate user "markdown"
        "markdown_mmd"      -> getDefaultTemplate user "markdown"
        "markdown_phpextra" -> getDefaultTemplate user "markdown"
-       _        -> let fname = "templates" </> "default" <.> format
-                   in  E.try $ readDataFileUTF8 user fname
 
 newtype Template = Template { unTemplate :: Value -> Text }
                  deriving Monoid

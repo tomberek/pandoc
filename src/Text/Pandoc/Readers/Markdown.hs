@@ -52,7 +52,7 @@ import Text.Pandoc.Options
 import Text.Pandoc.Shared
 import Text.Pandoc.XML (fromEntities)
 import Text.Pandoc.Parsing hiding (tableWith)
-import Text.Pandoc.Readers.LaTeX ( rawLaTeXInline, rawLaTeXBlock )
+import Text.Pandoc.Readers.LaTeX ( rawLaTeXBlock )
 import Text.Pandoc.Readers.HTML ( htmlTag, htmlInBalanced, isInlineTag, isBlockTag,
                                   isTextTag, isCommentTag )
 import Data.Monoid (mconcat, mempty)
@@ -464,7 +464,6 @@ block = do
   res <- choice [ mempty <$ blanklines
                , codeBlockFenced
                , yamlMetaBlock
-               , guardEnabled Ext_latex_macros *> (macro >>= return . return)
                -- note: bulletList needs to be before header because of
                -- the possibility of empty list items: -
                , bulletList
@@ -1419,7 +1418,6 @@ inline = choice [ whitespace
                 , cite
                 , link
                 , image
-                , math
                 , strikeout
                 , subscript
                 , superscript
@@ -1428,7 +1426,6 @@ inline = choice [ whitespace
                 , spanHtml
                 , rawHtmlInline
                 , escapedChar
-                , rawLaTeXInline'
                 , exampleRef
                 , smart
                 , return . B.singleton <$> charRef
@@ -1489,12 +1486,6 @@ code = try $ do
   attr <- option ([],[],[]) (try $ guardEnabled Ext_inline_code_attributes >>
                                    optional whitespace >> attributes)
   return $ return $ B.codeWith attr $ trim $ concat result
-
-math :: MarkdownParser (F Inlines)
-math =  (return . B.displayMath <$> (mathDisplay >>= applyMacros'))
-     <|> (return . B.math <$> (mathInline >>= applyMacros')) <+?>
-               ((getOption readerSmart >>= guard) *> (return <$> apostrophe)
-                <* notFollowedBy space)
 
 -- Parses material enclosed in *s, **s, _s, or __s.
 -- Designed to avoid backtracking.
@@ -1782,14 +1773,6 @@ inlineNote = try $ do
   char '^'
   contents <- inlinesInBalancedBrackets
   return $ B.note . B.para <$> contents
-
-rawLaTeXInline' :: MarkdownParser (F Inlines)
-rawLaTeXInline' = try $ do
-  guardEnabled Ext_raw_tex
-  lookAhead $ char '\\' >> notFollowedBy' (string "start") -- context env
-  RawInline _ s <- rawLaTeXInline
-  return $ return $ B.rawInline "tex" s
-  -- "tex" because it might be context or latex
 
 rawConTeXtEnvironment :: Parser [Char] st String
 rawConTeXtEnvironment = try $ do

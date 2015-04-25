@@ -14,7 +14,6 @@ import Control.Monad.State
 import Control.Applicative ((<$>))
 import Data.List (intersperse)
 import Data.Maybe (fromMaybe)
-import Text.TeXMath (readMathML, writeTeX)
 import Text.Pandoc.Error (PandocError)
 import Text.Pandoc.Compat.Except
 import Data.Default
@@ -897,9 +896,6 @@ parseInline (CRef ref) =
   return $ maybe (text $ map toUpper ref) (text . (:[])) $ lookupEntity ref
 parseInline (Elem e) =
   case qName (elName e) of
-        "equation" -> equation displayMath
-        "informalequation" -> equation displayMath
-        "inlineequation" -> equation math
         "subscript" -> subscript <$> innerInlines
         "superscript" -> superscript <$> innerInlines
         "inlinemediaobject" -> getImage e
@@ -966,12 +962,6 @@ parseInline (Elem e) =
         _          -> innerInlines
    where innerInlines = (trimInlines . mconcat) <$>
                           (mapM parseInline $ elContent e)
-         equation constructor = return $ mconcat $
-           map (constructor . writeTeX)
-           $ rights
-           $ map (readMathML . showElement . everywhere (mkT removePrefix))
-           $ filterChildren (\x -> qName (elName x) == "math" &&
-                                   qPrefix (elName x) == Just "mml") e
          removePrefix elname = elname { qPrefix = Nothing }
          codeWithLang = do
            let classes' = case attrValue "language" e of

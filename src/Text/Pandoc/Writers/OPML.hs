@@ -38,7 +38,6 @@ import Text.Pandoc.Writers.HTML (writeHtmlString)
 import Text.Pandoc.Writers.Markdown (writeMarkdown)
 import Text.Pandoc.Pretty
 import Data.Time
-import Text.Pandoc.Compat.Locale (defaultTimeLocale)
 import qualified Text.Pandoc.Builder as B
 
 -- | Convert Pandoc document to string in OPML format.

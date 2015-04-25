@@ -59,7 +59,6 @@ import Control.Applicative ( (<$>), (<$), (<*), (*>), (<|>))
 import Data.Monoid (mconcat, Monoid, mempty, (<>), First (..))
 import Text.Printf (printf)
 import Debug.Trace (trace)
-import Text.TeXMath (readMathML, writeTeX)
 import Data.Default (Default (..), def)
 import Control.Monad.Reader (Reader,ask, asks, local, runReader)
 
@@ -613,21 +612,13 @@ pRawHtmlInline = do
      then return $ B.rawInline "html" $ renderTags' [result]
      else return mempty
 
-mathMLToTeXMath :: String -> Either String String
-mathMLToTeXMath s = writeTeX <$> readMathML s
-
 pMath :: Bool -> TagParser Inlines
 pMath inCase = try $ do
   open@(TagOpen _ attr) <- pSatisfy $ tagOpen (=="math") (const True)
   unless (inCase) (guard (maybe False  (== mathMLNamespace) (lookup "xmlns" attr)))
   contents <- manyTill pAnyTag (pSatisfy (~== TagClose "math"))
-  let math = mathMLToTeXMath $
-              (renderTags $ [open] ++ contents ++ [TagClose "math"])
-  let constructor =
-        maybe B.math (\x -> if (x == "inline") then B.math else B.displayMath)
-          (lookup "display" attr)
-  return $ either (const mempty)
-            (\x -> if null x then mempty else constructor x) math
+
+  return mempty
 
 pInlinesInTags :: String -> (Inlines -> Inlines)
                -> TagParser Inlines
@@ -683,9 +674,7 @@ type InlinesParser = HTMLParser String
 
 pTagContents :: InlinesParser Inlines
 pTagContents =
-      B.displayMath <$> mathDisplay
-  <|> B.math        <$> mathInline
-  <|> pStr
+      pStr
   <|> pSpace
   <|> smartPunctuation pTagContents
   <|> pSymbol

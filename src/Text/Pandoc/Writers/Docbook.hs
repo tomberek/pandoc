@@ -36,15 +36,12 @@ import Text.Pandoc.Walk
 import Text.Pandoc.Writers.Shared
 import Text.Pandoc.Options
 import Text.Pandoc.Templates (renderTemplate')
-import Text.Pandoc.Readers.TeXMath
 import Data.List ( stripPrefix, isPrefixOf, intercalate, isSuffixOf )
 import Data.Char ( toLower )
 import Control.Applicative ((<$>))
 import Data.Monoid ( Any(..) )
-import Text.Pandoc.Highlighting ( languages, languagesByExtension )
 import Text.Pandoc.Pretty
 import qualified Text.Pandoc.Builder as B
-import Text.TeXMath
 import qualified Text.XML.Light as Xml
 import Data.Generics (everywhere, mkT)
 
@@ -94,9 +91,7 @@ writeDocbook opts (Pandoc meta blocks) =
                  meta'
       main     = render' $ vcat (map (elementToDocbook opts' startLvl) elements)
       context = defField "body" main
-              $ defField "mathml" (case writerHTMLMathMethod opts of
-                                        MathML _ -> True
-                                        _        -> False)
+              $ defField "mathml" False
               $ metadata
   in  if writerStandalone opts
          then renderTemplate' (writerTemplate opts) context
@@ -181,10 +176,7 @@ blockToDocbook _ (CodeBlock (_,classes,_) str) =
                      then ""
                      else " language=\"" ++ escapeStringForXML (head langs) ++
                           "\""
-          isLang l    = map toLower l `elem` map (map toLower) languages
-          langsFrom s = if isLang s
-                           then [s]
-                           else languagesByExtension . map toLower $ s
+          langsFrom s = [s]
           langs       = concatMap langsFrom classes
 blockToDocbook opts (BulletList lst) =
   let attribs = [("spacing", "compact") | isTightList lst]
@@ -293,23 +285,6 @@ inlineToDocbook opts (Span _ ils) =
   inlinesToDocbook opts ils
 inlineToDocbook _ (Code _ str) =
   inTagsSimple "literal" $ text (escapeStringForXML str)
-inlineToDocbook opts (Math t str)
-  | isMathML (writerHTMLMathMethod opts) =
-    case writeMathML dt <$> readTeX str of
-      Right r  -> inTagsSimple tagtype
-                  $ text $ Xml.ppcElement conf
-                  $ fixNS
-                  $ removeAttr r
-      Left _   -> inlinesToDocbook opts
-                  $ texMathToInlines t str
-  | otherwise = inlinesToDocbook opts $ texMathToInlines t str
-     where (dt, tagtype) = case t of
-                            InlineMath  -> (DisplayInline,"inlineequation")
-                            DisplayMath -> (DisplayBlock,"informalequation")
-           conf = Xml.useShortEmptyTags (const False) Xml.defaultConfigPP
-           removeAttr e = e{ Xml.elAttribs = [] }
-           fixNS' qname = qname{ Xml.qPrefix = Just "mml" }
-           fixNS = everywhere (mkT fixNS')
 inlineToDocbook _ (RawInline f x) | f == "html" || f == "docbook" = text x
                                   | otherwise                     = empty
 inlineToDocbook _ LineBreak = text "\n"
