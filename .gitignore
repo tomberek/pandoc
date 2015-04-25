@@ -22,3 +22,8 @@ man/man?/*.html
 windows/*.wixobj
 data/reference.docx
 data/reference.odt
+*.js_dyn_hi
+*.js_dyn_o
+*.js_hi
+*.js_o
+*.jsexe
