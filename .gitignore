@@ -27,4 +27,3 @@ data/reference.odt
 *.js_hi
 *.js_o
 *.jsexe
-/src/Text/Pandoc/Data.hs
