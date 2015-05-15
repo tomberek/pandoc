@@ -1,6 +1,6 @@
 {-# LANGUAGE PatternGuards, CPP, ScopedTypeVariables, ViewPatterns, FlexibleContexts #-}
 {-
-Copyright (C) 2010-2014 John MacFarlane <jgm@berkeley.edu>
+Copyright (C) 2010-2015 John MacFarlane <jgm@berkeley.edu>
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -19,7 +19,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
 {- |
    Module      : Text.Pandoc.Writers.EPUB
-   Copyright   : Copyright (C) 2010-2014 John MacFarlane
+   Copyright   : Copyright (C) 2010-2015 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -31,7 +31,7 @@ Conversion of 'Pandoc' documents to EPUB.
 module Text.Pandoc.Writers.EPUB ( writeEPUB ) where
 import Data.IORef ( IORef, newIORef, readIORef, modifyIORef )
 import qualified Data.Map as M
-import Data.Maybe ( fromMaybe )
+import Data.Maybe ( fromMaybe, catMaybes )
 import Data.List ( isPrefixOf, isInfixOf, intercalate )
 import System.Environment ( getEnv )
 import Text.Printf (printf)
@@ -57,15 +57,17 @@ import Text.Pandoc.Options ( WriterOptions(..)
                            , ObfuscationMethod(NoObfuscation) )
 import Text.Pandoc.Definition
 import Text.Pandoc.Walk (walk, walkM)
+import Data.Default
+import Text.Pandoc.Writers.Markdown (writePlain)
 import Control.Monad.State (modify, get, execState, State, put, evalState)
-import Control.Monad (foldM, mplus, liftM, when)
+import Control.Monad (mplus, liftM, when)
 import Text.XML.Light ( unode, Element(..), unqual, Attr(..), add_attrs
                       , strContent, lookupAttr, Node(..), QName(..), parseXML
                       , onlyElems, node, ppElement)
 import Text.Pandoc.UUID (getRandomUUID)
 import Text.Pandoc.Writers.HTML (writeHtmlString, writeHtml)
 import Data.Char ( toLower, isDigit, isAlphaNum )
-import Text.Pandoc.MIME (MimeType, getMimeType)
+import Text.Pandoc.MIME (MimeType, getMimeType, extensionFromMimeType)
 import qualified Control.Exception as E
 import Text.Blaze.Html.Renderer.Utf8 (renderHtml)
 import Text.HTML.TagSoup (Tag(TagOpen), fromAttrib, parseTags)
@@ -226,8 +228,9 @@ addMetadataFromXML _ md = md
 
 metaValueToString :: MetaValue -> String
 metaValueToString (MetaString s) = s
-metaValueToString (MetaInlines ils) = stringify ils
-metaValueToString (MetaBlocks bs) = stringify bs
+metaValueToString (MetaInlines ils) = writePlain def
+                                      (Pandoc nullMeta [Plain ils])
+metaValueToString (MetaBlocks bs) = writePlain def (Pandoc nullMeta bs)
 metaValueToString (MetaBool b) = show b
 metaValueToString _ = ""
 
@@ -375,17 +378,7 @@ writeEPUB opts doc@(Pandoc meta _) = do
   mediaRef <- newIORef []
   Pandoc _ blocks <- walkM (transformInline opts' mediaRef) doc >>=
                      walkM (transformBlock opts' mediaRef)
-  pics <- readIORef mediaRef
-  let readPicEntry entries (oldsrc, newsrc) = do
-        res <- fetchItem' (writerMediaBag opts')
-                  (writerSourceURL opts') oldsrc
-        case res of
-             Left _        -> do
-              warn $ "Could not find media `" ++ oldsrc ++ "', skipping..."
-              return entries
-             Right (img,_) -> return $
-              (toEntry newsrc epochtime $ B.fromChunks . (:[]) $ img) : entries
-  picEntries <- foldM readPicEntry [] pics
+  picEntries <- (catMaybes . map (snd . snd)) <$> readIORef mediaRef
 
   -- handle fonts
   let matchingGlob f = do
@@ -531,7 +524,7 @@ writeEPUB opts doc@(Pandoc meta _) = do
               case epubCoverImage metadata of
                     Nothing -> []
                     Just _ -> [ unode "itemref" !
-                                [("idref", "cover_xhtml"),("linear","no")] $ () ]
+                                [("idref", "cover_xhtml")] $ () ]
               ++ ((unode "itemref" ! [("idref", "title_page_xhtml")
                                      ,("linear",
                                          case lookupMeta "title" meta of
@@ -791,59 +784,75 @@ metadataElement version md currentTime =
 showDateTimeISO8601 :: UTCTime -> String
 showDateTimeISO8601 = formatTime defaultTimeLocale "%FT%TZ"
 
-transformTag :: IORef [(FilePath, FilePath)] -- ^ (oldpath, newpath) media
+transformTag :: WriterOptions
+             -> IORef [(FilePath, (FilePath, Maybe Entry))] -- ^ (oldpath, newpath, entry) media
              -> Tag String
              -> IO (Tag String)
-transformTag mediaRef tag@(TagOpen name attr)
+transformTag opts mediaRef tag@(TagOpen name attr)
   | name `elem` ["video", "source", "img", "audio"] = do
   let src = fromAttrib "src" tag
   let poster = fromAttrib "poster" tag
-  newsrc <- modifyMediaRef mediaRef src
-  newposter <- modifyMediaRef mediaRef poster
+  newsrc <- modifyMediaRef opts mediaRef src
+  newposter <- modifyMediaRef opts mediaRef poster
   let attr' = filter (\(x,_) -> x /= "src" && x /= "poster") attr ++
               [("src", newsrc) | not (null newsrc)] ++
               [("poster", newposter) | not (null newposter)]
   return $ TagOpen name attr'
-transformTag _ tag = return tag
+transformTag _ _ tag = return tag
 
-modifyMediaRef :: IORef [(FilePath, FilePath)] -> FilePath -> IO FilePath
-modifyMediaRef _ "" = return ""
-modifyMediaRef mediaRef oldsrc = do
+modifyMediaRef :: WriterOptions
+               -> IORef [(FilePath, (FilePath, Maybe Entry))]
+               -> FilePath
+               -> IO FilePath
+modifyMediaRef _ _ "" = return ""
+modifyMediaRef opts mediaRef oldsrc = do
   media <- readIORef mediaRef
   case lookup oldsrc media of
-         Just n  -> return n
-         Nothing -> do
-           let new = "media/file" ++ show (length media) ++
-                    takeExtension (takeWhile (/='?') oldsrc) -- remove query
-           modifyIORef mediaRef ( (oldsrc, new): )
+         Just (n,_) -> return n
+         Nothing    -> do
+           res <- fetchItem' (writerMediaBag opts)
+                    (writerSourceURL opts) oldsrc
+           (new, mbEntry) <-
+                case res of
+                      Left _        -> do
+                        warn $ "Could not find media `" ++ oldsrc ++ "', skipping..."
+                        return (oldsrc, Nothing)
+                      Right (img,mbMime) -> do
+                        let new = "media/file" ++ show (length media) ++
+                               fromMaybe (takeExtension (takeWhile (/='?') oldsrc))
+                                 (('.':) <$> (mbMime >>= extensionFromMimeType))
+                        epochtime <- floor `fmap` getPOSIXTime
+                        let entry = toEntry new epochtime $ B.fromChunks . (:[]) $ img
+                        return (new, Just entry)
+           modifyIORef mediaRef ( (oldsrc, (new, mbEntry)): )
            return new
 
 transformBlock  :: WriterOptions
-                -> IORef [(FilePath, FilePath)] -- ^ (oldpath, newpath) media
+                -> IORef [(FilePath, (FilePath, Maybe Entry))] -- ^ (oldpath, newpath, entry) media
                 -> Block
                 -> IO Block
-transformBlock _ mediaRef (RawBlock fmt raw)
+transformBlock opts mediaRef (RawBlock fmt raw)
   | fmt == Format "html" = do
   let tags = parseTags raw
-  tags' <- mapM (transformTag mediaRef)  tags
+  tags' <- mapM (transformTag opts mediaRef)  tags
   return $ RawBlock fmt (renderTags' tags')
 transformBlock _ _ b = return b
 
 transformInline  :: WriterOptions
-                 -> IORef [(FilePath, FilePath)] -- ^ (oldpath, newpath) media
+                 -> IORef [(FilePath, (FilePath, Maybe Entry))] -- ^ (oldpath, newpath) media
                  -> Inline
                  -> IO Inline
-transformInline _ mediaRef (Image lab (src,tit)) = do
-    newsrc <- modifyMediaRef mediaRef src
+transformInline opts mediaRef (Image lab (src,tit)) = do
+    newsrc <- modifyMediaRef opts mediaRef src
     return $ Image lab (newsrc, tit)
 transformInline opts _ (x@(Math _ _))
   | WebTeX _ <- writerHTMLMathMethod opts = do
     raw <- makeSelfContained opts $ writeHtmlInline opts x
     return $ RawInline (Format "html") raw
-transformInline _ mediaRef  (RawInline fmt raw)
+transformInline opts mediaRef  (RawInline fmt raw)
   | fmt == Format "html" = do
   let tags = parseTags raw
-  tags' <- mapM (transformTag mediaRef) tags
+  tags' <- mapM (transformTag opts mediaRef) tags
   return $ RawInline fmt (renderTags' tags')
 transformInline _ _ x = return x
 

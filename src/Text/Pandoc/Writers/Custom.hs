@@ -1,7 +1,11 @@
-{-# LANGUAGE OverlappingInstances, FlexibleInstances, OverloadedStrings,
-    ScopedTypeVariables, DeriveDataTypeable #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
-{- Copyright (C) 2012-2014 John MacFarlane <jgm@berkeley.edu>
+{-# LANGUAGE FlexibleInstances, OverloadedStrings,
+    ScopedTypeVariables, DeriveDataTypeable, CPP #-}
+#if MIN_VERSION_base(4,8,0)
+#else
+{-# LANGUAGE OverlappingInstances #-}
+#endif
+{- Copyright (C) 2012-2015 John MacFarlane <jgm@berkeley.edu>
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -20,7 +24,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
 {- |
    Module      : Text.Pandoc.Writers.Custom
-   Copyright   : Copyright (C) 2012-2014 John MacFarlane
+   Copyright   : Copyright (C) 2012-2015 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -39,20 +43,19 @@ import Data.Typeable
 import Scripting.Lua (LuaState, StackValue, callfunc)
 import Text.Pandoc.Writers.Shared
 import qualified Scripting.Lua as Lua
-import Text.Pandoc.UTF8 (fromString, toString)
-import Data.ByteString (ByteString)
-import qualified Data.ByteString.Char8 as C8
+import qualified Text.Pandoc.UTF8 as UTF8
 import Data.Monoid
 import Control.Monad (when)
 import Control.Exception
 import qualified Data.Map as M
 import Text.Pandoc.Templates
+import GHC.IO.Encoding (getForeignEncoding,setForeignEncoding, utf8)
 
-attrToMap :: Attr -> M.Map ByteString ByteString
+attrToMap :: Attr -> M.Map String String
 attrToMap (id',classes,keyvals) = M.fromList
-    $ ("id", fromString id')
-    : ("class", fromString $ unwords classes)
-    : map (\(x,y) -> (fromString x, fromString y)) keyvals
+    $ ("id", id')
+    : ("class", unwords classes)
+    : keyvals
 
 getList :: StackValue a => LuaState -> Int -> IO [a]
 getList lua i' = do
@@ -66,12 +69,11 @@ getList lua i' = do
        return (x : rest)
      else return []
 
-instance StackValue ByteString where
-    push l x = Lua.push l $ C8.unpack x
-    peek l n = (fmap . fmap) C8.pack (Lua.peek l n)
-    valuetype _ = Lua.TSTRING
-
+#if MIN_VERSION_base(4,8,0)
+instance {-# OVERLAPS #-} StackValue a => StackValue [a] where
+#else
 instance StackValue a => StackValue [a] where
+#endif
   push lua xs = do
     Lua.createtable lua (length xs + 1) 0
     let addValue (i, x) = Lua.push lua x >> Lua.rawseti lua (-2) i
@@ -110,12 +112,12 @@ instance (StackValue a, StackValue b) => StackValue (a,b) where
   valuetype _ = Lua.TTABLE
 
 instance StackValue [Inline] where
-  push l ils = Lua.push l . C8.unpack =<< inlineListToCustom l ils
+  push l ils = Lua.push l =<< inlineListToCustom l ils
   peek _ _ = undefined
   valuetype _ = Lua.TSTRING
 
 instance StackValue [Block] where
-  push l ils = Lua.push l . C8.unpack =<< blockListToCustom l ils
+  push l ils = Lua.push l =<< blockListToCustom l ils
   peek _ _ = undefined
   valuetype _ = Lua.TSTRING
 
@@ -137,7 +139,7 @@ instance StackValue MetaValue where
 instance StackValue Citation where
   push lua cit = do
     Lua.createtable lua 6 0
-    let addValue ((k :: String), v) = Lua.push lua k >> Lua.push lua v >>
+    let addValue (k :: String, v) = Lua.push lua k >> Lua.push lua v >>
                           Lua.rawset lua (-3)
     addValue ("citationId", citationId cit)
     addValue ("citationPrefix", citationPrefix cit)
@@ -156,7 +158,9 @@ instance Exception PandocLuaException
 -- | Convert Pandoc to custom markup.
 writeCustom :: FilePath -> WriterOptions -> Pandoc -> IO String
 writeCustom luaFile opts doc@(Pandoc meta _) = do
-  luaScript <- C8.unpack `fmap` C8.readFile luaFile
+  luaScript <- UTF8.readFile luaFile
+  enc <- getForeignEncoding
+  setForeignEncoding utf8
   lua <- Lua.newstate
   Lua.openlibs lua
   status <- Lua.loadstring lua luaScript luaFile
@@ -168,18 +172,19 @@ writeCustom luaFile opts doc@(Pandoc meta _) = do
   -- TODO - call hierarchicalize, so we have that info
   rendered <- docToCustom lua opts doc
   context <- metaToJSON opts
-             (fmap toString . blockListToCustom lua)
-             (fmap toString . inlineListToCustom lua)
+             (blockListToCustom lua)
+             (inlineListToCustom lua)
              meta
   Lua.close lua
-  let body = toString rendered
+  setForeignEncoding enc
+  let body = rendered
   if writerStandalone opts
      then do
        let context' = setField "body" body context
        return $ renderTemplate' (writerTemplate opts) context'
      else return body
 
-docToCustom :: LuaState -> WriterOptions -> Pandoc -> IO ByteString
+docToCustom :: LuaState -> WriterOptions -> Pandoc -> IO String
 docToCustom lua opts (Pandoc (Meta metamap) blocks) = do
   body <- blockListToCustom lua blocks
   callfunc lua "Doc" body metamap (writerVariables opts)
@@ -187,7 +192,7 @@ docToCustom lua opts (Pandoc (Meta metamap) blocks) = do
 -- | Convert Pandoc block element to Custom.
 blockToCustom :: LuaState      -- ^ Lua state
               -> Block         -- ^ Block element
-              -> IO ByteString
+              -> IO String
 
 blockToCustom _ Null = return ""
 
@@ -199,7 +204,7 @@ blockToCustom lua (Para [Image txt (src,tit)]) =
 blockToCustom lua (Para inlines) = callfunc lua "Para" inlines
 
 blockToCustom lua (RawBlock format str) =
-  callfunc lua "RawBlock" format (fromString str)
+  callfunc lua "RawBlock" format str
 
 blockToCustom lua HorizontalRule = callfunc lua "HorizontalRule"
 
@@ -207,7 +212,7 @@ blockToCustom lua (Header level attr inlines) =
   callfunc lua "Header" level inlines (attrToMap attr)
 
 blockToCustom lua (CodeBlock attr str) =
-  callfunc lua "CodeBlock" (fromString str) (attrToMap attr)
+  callfunc lua "CodeBlock" str (attrToMap attr)
 
 blockToCustom lua (BlockQuote blocks) = callfunc lua "BlockQuote" blocks
 
@@ -228,22 +233,22 @@ blockToCustom lua (Div attr items) =
 -- | Convert list of Pandoc block elements to Custom.
 blockListToCustom :: LuaState -- ^ Options
                   -> [Block]       -- ^ List of block elements
-                  -> IO ByteString
+                  -> IO String
 blockListToCustom lua xs = do
   blocksep <- callfunc lua "Blocksep"
   bs <- mapM (blockToCustom lua) xs
   return $ mconcat $ intersperse blocksep bs
 
 -- | Convert list of Pandoc inline elements to Custom.
-inlineListToCustom :: LuaState -> [Inline] -> IO ByteString
+inlineListToCustom :: LuaState -> [Inline] -> IO String
 inlineListToCustom lua lst = do
   xs <- mapM (inlineToCustom lua) lst
-  return $ C8.concat xs
+  return $ concat xs
 
 -- | Convert Pandoc inline element to Custom.
-inlineToCustom :: LuaState -> Inline -> IO ByteString
+inlineToCustom :: LuaState -> Inline -> IO String
 
-inlineToCustom lua (Str str) = callfunc lua "Str" $ fromString str
+inlineToCustom lua (Str str) = callfunc lua "Str" str
 
 inlineToCustom lua Space = callfunc lua "Space"
 
@@ -266,24 +271,24 @@ inlineToCustom lua (Quoted DoubleQuote lst) = callfunc lua "DoubleQuoted" lst
 inlineToCustom lua (Cite cs lst) = callfunc lua "Cite" lst cs
 
 inlineToCustom lua (Code attr str) =
-  callfunc lua "Code" (fromString str) (attrToMap attr)
+  callfunc lua "Code" str (attrToMap attr)
 
 inlineToCustom lua (Math DisplayMath str) =
-  callfunc lua "DisplayMath" (fromString str)
+  callfunc lua "DisplayMath" str
 
 inlineToCustom lua (Math InlineMath str) =
-  callfunc lua "InlineMath" (fromString str)
+  callfunc lua "InlineMath" str
 
 inlineToCustom lua (RawInline format str) =
-  callfunc lua "RawInline" format (fromString str)
+  callfunc lua "RawInline" format str
 
 inlineToCustom lua (LineBreak) = callfunc lua "LineBreak"
 
 inlineToCustom lua (Link txt (src,tit)) =
-  callfunc lua "Link" txt (fromString src) (fromString tit)
+  callfunc lua "Link" txt src tit
 
 inlineToCustom lua (Image alt (src,tit)) =
-  callfunc lua "Image" alt (fromString src) (fromString tit)
+  callfunc lua "Image" alt src tit
 
 inlineToCustom lua (Note contents) = callfunc lua "Note" contents
 

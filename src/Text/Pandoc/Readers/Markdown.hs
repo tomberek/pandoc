@@ -1,7 +1,7 @@
 {-# LANGUAGE RelaxedPolyRec #-} -- needed for inlinesBetween on GHC < 7
 {-# LANGUAGE ScopedTypeVariables #-}
 {-
-Copyright (C) 2006-2014 John MacFarlane <jgm@berkeley.edu>
+Copyright (C) 2006-2015 John MacFarlane <jgm@berkeley.edu>
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -20,7 +20,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
 {- |
    Module      : Text.Pandoc.Readers.Markdown
-   Copyright   : Copyright (C) 2006-2014 John MacFarlane
+   Copyright   : Copyright (C) 2006-2015 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -165,19 +165,23 @@ litChar = escapedChar'
 -- | Parse a sequence of inline elements between square brackets,
 -- including inlines between balanced pairs of square brackets.
 inlinesInBalancedBrackets :: MarkdownParser (F Inlines)
-inlinesInBalancedBrackets = charsInBalancedBrackets >>=
-  parseFromString (trimInlinesF . mconcat <$> many inline)
-
-charsInBalancedBrackets :: MarkdownParser [Char]
-charsInBalancedBrackets = do
+inlinesInBalancedBrackets = do
   char '['
-  result <- manyTill (  many1 (noneOf "`[]\n")
-                    <|> (snd <$> withRaw code)
-                    <|> ((\xs -> '[' : xs ++ "]") <$> charsInBalancedBrackets)
-                    <|> count 1 (satisfy (/='\n'))
-                    <|> (newline >> notFollowedBy blankline >> return "\n")
-                     ) (char ']')
-  return $ concat result
+  (_, raw) <- withRaw $ charsInBalancedBrackets 1
+  guard $ not $ null raw
+  parseFromString (trimInlinesF . mconcat <$> many inline) (init raw)
+
+charsInBalancedBrackets :: Int -> MarkdownParser ()
+charsInBalancedBrackets 0 = return ()
+charsInBalancedBrackets openBrackets =
+      (char '[' >> charsInBalancedBrackets (openBrackets + 1))
+  <|> (char ']' >> charsInBalancedBrackets (openBrackets - 1))
+  <|> ((  (() <$ code)
+     <|> (() <$ (escapedChar'))
+     <|> (newline >> notFollowedBy blankline)
+     <|> skipMany1 (noneOf "[]`\n\\")
+     <|> (() <$ count 1 (oneOf "`\\"))
+      ) >> charsInBalancedBrackets openBrackets)
 
 --
 -- document structure
@@ -504,9 +508,12 @@ atxHeader = try $ do
   notFollowedBy $ guardEnabled Ext_fancy_lists >>
                   (char '.' <|> char ')') -- this would be a list
   skipSpaces
-  text <- trimInlinesF . mconcat <$> many (notFollowedBy atxClosing >> inline)
+  (text, raw) <- withRaw $
+          trimInlinesF . mconcat <$> many (notFollowedBy atxClosing >> inline)
   attr <- atxClosing
-  attr' <- registerHeader attr (runF text defaultParserState)
+  attr'@(ident,_,_) <- registerHeader attr (runF text defaultParserState)
+  guardDisabled Ext_implicit_header_references
+    <|> registerImplicitHeader raw ident
   return $ B.headerWith attr' level <$> text
 
 atxClosing :: MarkdownParser Attr
@@ -539,14 +546,23 @@ setextHeader = try $ do
   -- This lookahead prevents us from wasting time parsing Inlines
   -- unless necessary -- it gives a significant performance boost.
   lookAhead $ anyLine >> many1 (oneOf setextHChars) >> blankline
-  text <- trimInlinesF . mconcat <$> many1 (notFollowedBy setextHeaderEnd >> inline)
+  (text, raw) <- withRaw $
+       trimInlinesF . mconcat <$> many1 (notFollowedBy setextHeaderEnd >> inline)
   attr <- setextHeaderEnd
   underlineChar <- oneOf setextHChars
   many (char underlineChar)
   blanklines
   let level = (fromMaybe 0 $ findIndex (== underlineChar) setextHChars) + 1
-  attr' <- registerHeader attr (runF text defaultParserState)
+  attr'@(ident,_,_) <- registerHeader attr (runF text defaultParserState)
+  guardDisabled Ext_implicit_header_references
+    <|> registerImplicitHeader raw ident
   return $ B.headerWith attr' level <$> text
+
+registerImplicitHeader :: String -> String -> MarkdownParser ()
+registerImplicitHeader raw ident = do
+  let key = toKey $ "[" ++ raw ++ "]"
+  updateState (\s -> s { stateHeaderKeys =
+                         M.insert key ('#':ident,"") (stateHeaderKeys s) })
 
 --
 -- hrule block
@@ -879,7 +895,7 @@ definitionListItem compact = try $ do
   rawLine' <- anyLine
   raw <- many1 $ defRawBlock compact
   term <- parseFromString (trimInlinesF . mconcat <$> many inline) rawLine'
-  contents <- mapM (parseFromString parseBlocks) raw
+  contents <- mapM (parseFromString parseBlocks . (++"\n")) raw
   optional blanklines
   return $ liftM2 (,) term (sequence contents)
 
@@ -890,6 +906,7 @@ defRawBlock compact = try $ do
   firstline <- anyLine
   let dline = try
                ( do notFollowedBy blankline
+                    notFollowedByHtmlCloser
                     if compact -- laziness not compatible with compact
                        then () <$ indentSpaces
                        else (() <$ indentSpaces)
@@ -1686,7 +1703,7 @@ referenceLink :: (String -> String -> Inlines -> Inlines)
               -> (F Inlines, String) -> MarkdownParser (F Inlines)
 referenceLink constructor (lab, raw) = do
   sp <- (True <$ lookAhead (char ' ')) <|> return False
-  (ref,raw') <- option (mempty, "") $
+  (_,raw') <- option (mempty, "") $
       lookAhead (try (spnl >> normalCite >> return (mempty, "")))
       <|>
       try (spnl >> reference)
@@ -1706,13 +1723,13 @@ referenceLink constructor (lab, raw) = do
   return $ do
     keys <- asksF stateKeys
     case M.lookup key keys of
-       Nothing        -> do
-         headers <- asksF stateHeaders
-         ref' <- if labIsRef then lab else ref
+       Nothing        ->
          if implicitHeaderRefs
-            then case M.lookup ref' headers of
-                   Just ident -> constructor ('#':ident) "" <$> lab
-                   Nothing    -> makeFallback
+            then do
+              headerKeys <- asksF stateHeaderKeys
+              case M.lookup key headerKeys of
+                   Just (src, tit) -> constructor src tit <$> lab
+                   Nothing         -> makeFallback
             else makeFallback
        Just (src,tit) -> constructor src tit <$> lab
 
@@ -1870,8 +1887,20 @@ textualCite = try $ do
          return $ (flip B.cite (B.text $ '@':key ++ " " ++ raw) . (first:))
                <$> rest
        Nothing   ->
-         (do (cs, raw) <- withRaw $ bareloc first
-             return $ (flip B.cite (B.text $ '@':key ++ " " ++ raw)) <$> cs)
+         (do
+          (cs, raw) <- withRaw $ bareloc first
+          let (spaces',raw') = span isSpace raw
+              spc | null spaces' = mempty
+                  | otherwise    = B.space
+          lab <- parseFromString (mconcat <$> many inline) $ dropBrackets raw'
+          fallback <- referenceLink B.link (lab,raw')
+          return $ do
+            fallback' <- fallback
+            cs' <- cs
+            return $
+              case B.toList fallback' of
+                Link{}:_ -> B.cite [first] (B.str $ '@':key) <> spc <> fallback'
+                _        -> B.cite cs' (B.text $ '@':key ++ " " ++ raw))
          <|> return (do st <- askF
                         return $ case M.lookup key (stateExamples st) of
                                  Just n -> B.str (show n)
@@ -1881,10 +1910,12 @@ bareloc :: Citation -> MarkdownParser (F [Citation])
 bareloc c = try $ do
   spnl
   char '['
+  notFollowedBy $ char '^'
   suff <- suffix
   rest <- option (return []) $ try $ char ';' >> citeList
   spnl
   char ']'
+  notFollowedBy $ oneOf "[("
   return $ do
     suff' <- suff
     rest' <- rest

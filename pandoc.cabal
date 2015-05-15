@@ -4,7 +4,7 @@ Cabal-Version:   >= 1.10
 Build-Type:      Custom
 License:         GPL
 License-File:    COPYING
-Copyright:       (c) 2006-2014 John MacFarlane
+Copyright:       (c) 2006-2015 John MacFarlane
 Author:          John MacFarlane <jgm@berkeley.edu>
 Maintainer:      John MacFarlane <jgm@berkeley.edu>
 Bug-Reports:     https://github.com/jgm/pandoc/issues
@@ -263,6 +263,7 @@ Library
                  data-default >= 0.4 && < 0.6,
                  blaze-html >= 0.5 && < 0.9,
                  blaze-markup >= 0.5.1 && < 0.8,
+                 css-text >= 0.1.2 && < 0.3,
                  yaml >= 0.8.8.2 && < 0.9,
                  scientific >= 0.2 && < 0.4,
                  vector >= 0.10 && < 0.11,

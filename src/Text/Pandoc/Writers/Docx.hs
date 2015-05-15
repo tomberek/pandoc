@@ -1,6 +1,6 @@
 {-# LANGUAGE ScopedTypeVariables, PatternGuards, ViewPatterns #-}
 {-
-Copyright (C) 2012-2014 John MacFarlane <jgm@berkeley.edu>
+Copyright (C) 2012-2015 John MacFarlane <jgm@berkeley.edu>
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -19,7 +19,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
 {- |
    Module      : Text.Pandoc.Writers.Docx
-   Copyright   : Copyright (C) 2012-2014 John MacFarlane
+   Copyright   : Copyright (C) 2012-2015 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -1120,8 +1120,13 @@ inlineToOpenXML opts (Image alt (src, tit)) = do
           inlinesToOpenXML opts alt
         Right (img, mt) -> do
           ident <- ("rId"++) `fmap` getUniqueId
-          let size = imageSize img
-          let (xpt,ypt) = maybe (120,120) sizeInPoints size
+          (xpt,ypt) <- case imageSize img of
+                             Right size  -> return $ sizeInPoints size
+                             Left msg    -> do
+                               liftIO $ warn $
+                                 "Could not determine image size in `" ++
+                                 src ++ "': " ++ msg
+                               return (120,120)
           -- 12700 emu = 1 pt
           let (xemu,yemu) = fitToPage (xpt * 12700, ypt * 12700) (pageWidth * 12700)
           let cNvPicPr = mknode "pic:cNvPicPr" [] $

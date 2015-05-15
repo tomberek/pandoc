@@ -1,6 +1,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-
-Copyright (C) 2008-2014 John MacFarlane <jgm@berkeley.edu>
+Copyright (C) 2008-2015 John MacFarlane <jgm@berkeley.edu>
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -19,7 +19,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
 {- |
    Module      : Text.Pandoc.Writers.ODT
-   Copyright   : Copyright (C) 2008-2014 John MacFarlane
+   Copyright   : Copyright (C) 2008-2015 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -134,8 +134,12 @@ transformPicMath opts entriesRef (Image lab (src,t)) = do
        warn $ "Could not find image `" ++ src ++ "', skipping..."
        return $ Emph lab
      Right (img, mbMimeType) -> do
-       let size = imageSize img
-       let (w,h) = fromMaybe (0,0) $ sizeInPoints `fmap` size
+       (w,h) <- case imageSize img of
+                     Right size -> return $ sizeInPoints size
+                     Left msg   -> do
+                       warn $ "Could not determine image size in `" ++
+                         src ++ "': " ++ msg
+                       return (0,0)
        let tit' = show w ++ "x" ++ show h
        entries <- readIORef entriesRef
        let extension = fromMaybe (takeExtension $ takeWhile (/='?') src)

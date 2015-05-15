@@ -1,6 +1,6 @@
 {-# LANGUAGE CPP, TupleSections #-}
 {-
-Copyright (C) 2006-2014 John MacFarlane <jgm@berkeley.edu>
+Copyright (C) 2006-2015 John MacFarlane <jgm@berkeley.edu>
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -19,7 +19,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
 {- |
    Module      : Main
-   Copyright   : Copyright (C) 2006-2014 John MacFarlane
+   Copyright   : Copyright (C) 2006-2015 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley@edu>
@@ -58,7 +58,7 @@ import qualified Control.Exception as E
 import Control.Exception.Extensible ( throwIO )
 import qualified Text.Pandoc.UTF8 as UTF8
 import Control.Monad (when, unless, (>=>))
-import Data.Maybe (isJust, fromMaybe)
+import Data.Maybe (fromMaybe)
 import Data.Foldable (foldrM)
 import Network.URI (parseURI, isURI, URI(..))
 import qualified Data.ByteString.Lazy as B
@@ -79,7 +79,7 @@ type Transform = Pandoc -> Pandoc
 copyrightMessage :: String
 copyrightMessage = intercalate "\n" [
   "",
-  "Copyright (C) 2006-2014 John MacFarlane",
+  "Copyright (C) 2006-2015 John MacFarlane",
   "Web:  http://johnmacfarlane.net/pandoc",
   "This is free software; see the source for copying conditions.",
   "There is no warranty, not even for merchantability or fitness",
@@ -751,9 +751,6 @@ options =
                   (\arg opt -> return opt{ optMetadata = addMetadata
                                              "bibliography" (readMetaValue arg)
                                              $ optMetadata opt
-                                         , optVariables =
-                                            ("biblio-files", dropExtension arg) :
-                                            optVariables opt
                                          })
                    "FILE")
                  ""
@@ -1120,7 +1117,7 @@ main = do
 
 
   -- --bibliography implies -F pandoc-citeproc for backwards compatibility:
-  let needsCiteproc = isJust (M.lookup "bibliography" metadata) &&
+  let needsCiteproc = any ("--bibliography" `isPrefixOf`) rawArgs &&
                       optCiteMethod opts `notElem` [Natbib, Biblatex] &&
                       "pandoc-citeproc" `notElem` map takeBaseName filters
   let filters' = if needsCiteproc then "pandoc-citeproc" : filters

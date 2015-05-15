@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings, CPP, ViewPatterns, ScopedTypeVariables #-}
 {-# OPTIONS_GHC -fno-warn-deprecations #-}
 {-
-Copyright (C) 2006-2014 John MacFarlane <jgm@berkeley.edu>
+Copyright (C) 2006-2015 John MacFarlane <jgm@berkeley.edu>
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -20,7 +20,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
 {- |
    Module      : Text.Pandoc.Writers.HTML
-   Copyright   : Copyright (C) 2006-2014 John MacFarlane
+   Copyright   : Copyright (C) 2006-2015 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -42,7 +42,7 @@ import Numeric ( showHex )
 import Data.Char ( ord, toLower )
 import Data.List ( isPrefixOf, intersperse )
 import Data.String ( fromString )
-import Data.Maybe ( catMaybes, fromMaybe )
+import Data.Maybe ( catMaybes, fromMaybe, isJust )
 import Control.Monad.State
 import Text.Blaze.Html hiding(contents)
 import qualified Text.Blaze.Html5 as H5
@@ -672,7 +672,9 @@ inlineToHtml opts inline =
                                          writerIdentifierPrefix opts ++ "fn" ++ ref)
                                        ! A.class_ "footnoteRef"
                                        ! prefixedId opts ("fnref" ++ ref)
-                                       $ H.sup
+                                       $ (if isJust (writerEpubVersion opts)
+                                             then id
+                                             else H.sup)
                                        $ toHtml ref
                         return $ case writerEpubVersion opts of
                                       Just EPUB3 -> link ! customAttribute "epub:type" "noteref"
