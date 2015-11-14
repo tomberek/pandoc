@@ -44,8 +44,7 @@ import Data.Char ( chr, ord, isLetter, isAlphaNum )
 import Control.Monad.Trans (lift)
 import Control.Monad
 import Text.Pandoc.Builder
-import Control.Applicative
-import Data.Monoid
+import Control.Applicative ((<|>), many, optional)
 import Data.Maybe (fromMaybe, maybeToList)
 import System.Environment (getEnv)
 import System.FilePath (replaceExtension, (</>), takeExtension, addExtension)
@@ -189,8 +188,6 @@ inline = (mempty <$ comment)
      <|> (str "’" <$ char '\'')
      <|> (str "’" <$ char '’')
      <|> (str "\160" <$ char '~')
-     <|> try (superscript <$> (char '^' *> tok))
-     <|> (subscript <$> (char '_' *> tok))
      <|> (guardEnabled Ext_literate_haskell *> char '|' *> doLHSverb)
      <|> (str . (:[]) <$> tildeEscape)
      <|> (str . (:[]) <$> oneOf "[]")
@@ -224,7 +221,9 @@ blocks = mconcat <$> many block
 
 getRawCommand :: String -> LP String
 getRawCommand name' = do
-  rawargs <- withRaw (skipopts *> option "" dimenarg *> many braced)
+  rawargs <- withRaw (many (try (optional sp *> opt)) *>
+                      option "" (try (optional sp *> dimenarg)) *>
+                      many braced)
   return $ '\\' : name' ++ snd rawargs
 
 lookupListDefault :: (Ord k) => v -> [k] -> M.Map k v -> v
@@ -487,6 +486,7 @@ inlineCommands = M.fromList $
   , ("includegraphics", skipopts *> (unescapeURL <$> braced) >>= mkImage)
   , ("enquote", enquote)
   , ("cite", citation "cite" AuthorInText False)
+  , ("Cite", citation "cite" AuthorInText False)
   , ("citep", citation "citep" NormalCitation False)
   , ("citep*", citation "citep*" NormalCitation False)
   , ("citeal", citation "citeal" NormalCitation False)
@@ -778,16 +778,16 @@ tok :: LP Inlines
 tok = try $ grouped inline <|> inlineCommand <|> str <$> count 1 inlineChar
 
 opt :: LP Inlines
-opt = bracketed inline <* optional sp
+opt = bracketed inline
 
 skipopts :: LP ()
-skipopts = skipMany opt
+skipopts = skipMany (opt *> optional sp)
 
 inlineText :: LP Inlines
 inlineText = str <$> many1 inlineChar
 
 inlineChar :: LP Char
-inlineChar = noneOf "\\$%^_&~#{}^'`\"‘’“”-[] \t\n"
+inlineChar = noneOf "\\$%&~#{}^'`\"‘’“”-[] \t\n"
 
 environment :: LP Blocks
 environment = do
@@ -838,7 +838,7 @@ verbatimEnv' = fmap snd <$>
              string "\\begin"
              name <- braced'
              guard $ name `elem` ["verbatim", "Verbatim", "lstlisting",
-                                  "minted", "alltt"]
+                                  "minted", "alltt", "comment"]
              manyTill anyChar (try $ string $ "\\end{" ++ name ++ "}")
 
 blob' :: IncludeParser
@@ -965,10 +965,13 @@ addTableCaption = walkM go
 environments :: M.Map String (LP Blocks)
 environments = M.fromList
   [ ("document", env "document" blocks <* skipMany anyChar)
+  , ("abstract", mempty <$ (env "abstract" blocks >>= addMeta "abstract"))
   , ("letter", env "letter" letterContents)
   , ("figure", env "figure" $
          resetCaption *> skipopts *> blocks >>= addImageCaption)
   , ("center", env "center" blocks)
+  , ("longtable",  env "longtable" $
+         resetCaption *> skipopts *> blocks >>= addTableCaption)
   , ("table",  env "table" $
          resetCaption *> skipopts *> blocks >>= addTableCaption)
   , ("tabular*", env "tabular" $ simpTable True)
@@ -983,6 +986,7 @@ environments = M.fromList
   , ("code", guardEnabled Ext_literate_haskell *>
       (codeBlockWith ("",["sourceCode","literate","haskell"],[]) <$>
         verbEnv "code"))
+  , ("comment", mempty <$ verbEnv "comment")
   , ("verbatim", codeBlock <$> verbEnv "verbatim")
   , ("Verbatim",   do options <- option [] keyvals
                       let kvs = [ (if k == "firstnumber"
@@ -1216,7 +1220,16 @@ parseAligns = try $ do
   return aligns'
 
 hline :: LP ()
-hline = () <$ try (spaces' *> controlSeq "hline" <* spaces')
+hline = try $ do
+  spaces'
+  controlSeq "hline" <|>
+    -- booktabs rules:
+    controlSeq "toprule" <|>
+    controlSeq "bottomrule" <|>
+    controlSeq "midrule"
+  spaces'
+  optional $ bracketed (many1 (satisfy (/=']')))
+  return ()
 
 lbreak :: LP ()
 lbreak = () <$ try (spaces' *> controlSeq "\\" <* spaces')

@@ -37,16 +37,14 @@ import System.Environment ( getEnv )
 import Text.Printf (printf)
 import System.FilePath ( takeExtension, takeFileName )
 import System.FilePath.Glob ( namesMatching )
+import Network.HTTP ( urlEncode )
 import qualified Data.ByteString.Lazy as B
 import qualified Data.ByteString.Lazy.Char8 as B8
 import qualified Text.Pandoc.UTF8 as UTF8
-import Text.Pandoc.SelfContained ( makeSelfContained )
 import Codec.Archive.Zip ( emptyArchive, addEntryToArchive, eRelativePath, fromEntry                         , Entry, toEntry, fromArchive)
-import Control.Applicative ((<$>), (<$))
 import Data.Time.Clock.POSIX ( getPOSIXTime )
-import Data.Time (getCurrentTime,UTCTime, formatTime)
-import Text.Pandoc.Compat.Locale ( defaultTimeLocale )
-import Text.Pandoc.Shared ( trimr, renderTags', safeRead, uniqueIdent, trim
+import Text.Pandoc.Compat.Time
+import Text.Pandoc.Shared ( renderTags', safeRead, uniqueIdent, trim
                           , normalizeDate, readDataFile, stringify, warn
                           , hierarchicalize, fetchItem' )
 import qualified Text.Pandoc.Shared as S (Element(..))
@@ -56,16 +54,16 @@ import Text.Pandoc.Options ( WriterOptions(..)
                            , EPUBVersion(..)
                            , ObfuscationMethod(NoObfuscation) )
 import Text.Pandoc.Definition
-import Text.Pandoc.Walk (walk, walkM)
+import Text.Pandoc.Walk (walk, walkM, query)
 import Data.Default
 import Text.Pandoc.Writers.Markdown (writePlain)
-import Control.Monad.State (modify, get, execState, State, put, evalState)
+import Control.Monad.State (modify, get, State, put, evalState)
 import Control.Monad (mplus, liftM, when)
 import Text.XML.Light ( unode, Element(..), unqual, Attr(..), add_attrs
                       , strContent, lookupAttr, Node(..), QName(..), parseXML
                       , onlyElems, node, ppElement)
 import Text.Pandoc.UUID (getRandomUUID)
-import Text.Pandoc.Writers.HTML (writeHtmlString, writeHtml)
+import Text.Pandoc.Writers.HTML ( writeHtml )
 import Data.Char ( toLower, isDigit, isAlphaNum )
 import Text.Pandoc.MIME (MimeType, getMimeType, extensionFromMimeType)
 import qualified Control.Exception as E
@@ -408,17 +406,16 @@ writeEPUB opts doc@(Pandoc meta _) = do
                                                  (docTitle' meta) : blocks
 
   let chapterHeaderLevel = writerEpubChapterLevel opts
-  -- internal reference IDs change when we chunk the file,
-  -- so that '#my-header-1' might turn into 'chap004.xhtml#my-header'.
-  -- the next two lines fix that:
-  let reftable = correlateRefs chapterHeaderLevel blocks'
-  let blocks'' = replaceRefs reftable blocks'
 
   let isChapterHeader (Header n _ _) = n <= chapterHeaderLevel
+      isChapterHeader (Div ("",["references"],[]) (Header n _ _:_)) =
+        n <= chapterHeaderLevel
       isChapterHeader _ = False
 
   let toChapters :: [Block] -> State [Int] [Chapter]
       toChapters []     = return []
+      toChapters (Div ("",["references"],[]) bs@(Header 1 _ _:_) : rest) =
+        toChapters (bs ++ rest)
       toChapters (Header n attr@(_,classes,_) ils : bs) = do
         nums <- get
         mbnum <- if "unnumbered" `elem` classes
@@ -439,7 +436,37 @@ writeEPUB opts doc@(Pandoc meta _) = do
         let (xs,ys) = break isChapterHeader bs
         (Chapter Nothing (b:xs) :) `fmap` toChapters ys
 
-  let chapters = evalState (toChapters blocks'') []
+  let chapters' = evalState (toChapters blocks') []
+
+  let extractLinkURL' :: Int -> Inline -> [(String, String)]
+      extractLinkURL' num (Span (ident, _, _) _)
+        | not (null ident) = [(ident, showChapter num ++ ('#':ident))]
+      extractLinkURL' _ _ = []
+
+  let extractLinkURL :: Int -> Block -> [(String, String)]
+      extractLinkURL num (Div (ident, _, _) _)
+        | not (null ident) = [(ident, showChapter num ++ ('#':ident))]
+      extractLinkURL num (Header _ (ident, _, _) _)
+        | not (null ident) = [(ident, showChapter num ++ ('#':ident))]
+      extractLinkURL num b = query (extractLinkURL' num) b
+
+  let reftable = concat $ zipWith (\(Chapter _ bs) num ->
+                                    query (extractLinkURL num) bs)
+                          chapters' [1..]
+
+  let fixInternalReferences :: Inline -> Inline
+      fixInternalReferences (Link lab ('#':xs, tit)) =
+        case lookup xs reftable of
+             Just ys ->  Link lab (ys, tit)
+             Nothing -> Link lab ('#':xs, tit)
+      fixInternalReferences x = x
+
+  -- internal reference IDs change when we chunk the file,
+  -- so that '#my-header-1' might turn into 'chap004.xhtml#my-header'.
+  -- this fixes that:
+  let chapters = map (\(Chapter mbnum bs) ->
+                         Chapter mbnum $ walk fixInternalReferences bs)
+                 chapters'
 
   let chapToEntry :: Int -> Chapter -> Entry
       chapToEntry num (Chapter mbnum bs) = mkEntry (showChapter num)
@@ -545,7 +572,7 @@ writeEPUB opts doc@(Pandoc meta _) = do
   let contentsEntry = mkEntry "content.opf" contentsData
 
   -- toc.ncx
-  let secs = hierarchicalize blocks''
+  let secs = hierarchicalize blocks'
 
   let tocLevel = writerTOCDepth opts
 
@@ -789,7 +816,8 @@ transformTag :: WriterOptions
              -> Tag String
              -> IO (Tag String)
 transformTag opts mediaRef tag@(TagOpen name attr)
-  | name `elem` ["video", "source", "img", "audio"] = do
+  | name `elem` ["video", "source", "img", "audio"] &&
+    lookup "data-external" attr == Nothing = do
   let src = fromAttrib "src" tag
   let poster = fromAttrib "poster" tag
   newsrc <- modifyMediaRef opts mediaRef src
@@ -845,21 +873,17 @@ transformInline  :: WriterOptions
 transformInline opts mediaRef (Image lab (src,tit)) = do
     newsrc <- modifyMediaRef opts mediaRef src
     return $ Image lab (newsrc, tit)
-transformInline opts _ (x@(Math _ _))
-  | WebTeX _ <- writerHTMLMathMethod opts = do
-    raw <- makeSelfContained opts $ writeHtmlInline opts x
-    return $ RawInline (Format "html") raw
+transformInline opts mediaRef (x@(Math t m))
+  | WebTeX url <- writerHTMLMathMethod opts = do
+    newsrc <- modifyMediaRef opts mediaRef (url ++ urlEncode m)
+    let mathclass = if t == DisplayMath then "display" else "inline"
+    return $ Span ("",["math",mathclass],[]) [Image [x] (newsrc, "")]
 transformInline opts mediaRef  (RawInline fmt raw)
   | fmt == Format "html" = do
   let tags = parseTags raw
   tags' <- mapM (transformTag opts mediaRef) tags
   return $ RawInline fmt (renderTags' tags')
 transformInline _ _ x = return x
-
-writeHtmlInline :: WriterOptions -> Inline -> String
-writeHtmlInline opts z = trimr $
-  writeHtmlString opts{ writerStandalone = False }
-    $ Pandoc nullMeta [Plain [z]]
 
 (!) :: Node t => (t -> Element) -> [(String, String)] -> t -> Element
 (!) f attrs n = add_attrs (map (\(k,v) -> Attr (unqual k) v) attrs) (f n)
@@ -885,11 +909,6 @@ mediaTypeOf x =
     Just y | any (`isPrefixOf` y) mediaPrefixes -> Just y
     _                                           -> Nothing
 
-data IdentState = IdentState{
-       chapterNumber :: Int,
-       identTable    :: [(String,String)]
-       } deriving (Read, Show)
-
 -- Returns filename for chapter number.
 showChapter :: Int -> String
 showChapter = printf "ch%03d.xhtml"
@@ -905,45 +924,6 @@ addIdentifiers bs = evalState (mapM go bs) []
          put $ ident' : ids
          return $ Header n (ident',classes,kvs) ils
        go x = return x
-
--- Go through a block list and construct a table
--- correlating the automatically constructed references
--- that would be used in a normal pandoc document with
--- new URLs to be used in the EPUB.  For example, what
--- was "header-1" might turn into "ch006.xhtml#header".
-correlateRefs :: Int -> [Block] -> [(String,String)]
-correlateRefs chapterHeaderLevel bs =
-  identTable $ execState (walkM goBlock bs >>= walkM goInline)
-    IdentState{ chapterNumber = 0
-              , identTable = [] }
- where goBlock :: Block -> State IdentState Block
-       goBlock x@(Header n (ident,_,_) _) = x <$ addIdentifier (Just n) ident
-       goBlock x@(Div (ident,_,_) _) = x <$ addIdentifier Nothing ident
-       goBlock x = return x
-       goInline :: Inline -> State IdentState Inline
-       goInline x@(Span (ident,_,_) _) = x <$ addIdentifier Nothing ident
-       goInline x = return x
-       addIdentifier mbHeaderLevel ident = do
-          case mbHeaderLevel of
-               Just n | n <= chapterHeaderLevel ->
-                    modify $ \s -> s{ chapterNumber = chapterNumber s + 1 }
-               _ -> return ()
-          st <- get
-          let chapterid = showChapter (chapterNumber st) ++
-                          case mbHeaderLevel of
-                               Just n | n <= chapterHeaderLevel -> ""
-                               _ -> '#' : ident
-          modify $ \s -> s{ identTable = (ident, chapterid) : identTable st }
-
--- Replace internal link references using the table produced
--- by correlateRefs.
-replaceRefs :: [(String,String)] -> [Block] -> [Block]
-replaceRefs refTable = walk replaceOneRef
-  where replaceOneRef x@(Link lab ('#':xs,tit)) =
-          case lookup xs refTable of
-                Just url -> Link lab (url,tit)
-                Nothing  -> x
-        replaceOneRef x = x
 
 -- Variant of normalizeDate that allows partial dates: YYYY, YYYY-MM
 normalizeDate' :: String -> Maybe String

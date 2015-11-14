@@ -46,7 +46,10 @@ tests = [ testGroup "rubrics"
               unlines
               [ "foo"
               , "==="]
-          , "heading levels" =:
+          -- note: heading normalization is only done in standalone mode
+          , test (writeRST def{ writerStandalone = True,
+                                writerTemplate = "$body$\n" } . toPandoc)
+            "heading levels" $
               header 1 (text "Header 1") <>
               header 3 (text "Header 2") <>
               header 2 (text "Header 2") <>
@@ -60,6 +63,33 @@ tests = [ testGroup "rubrics"
               , ""
               , "Header 2"
               , "--------"
+              , ""
+              , "Header 2"
+              , "--------"
+              , ""
+              , "Header 1"
+              , "========"
+              , ""
+              , "Header 2"
+              , "--------"
+              , ""
+              , "Header 3"
+              , "~~~~~~~~"
+              , ""
+              , "Header 2"
+              , "--------"]
+          , test (writeRST def{ writerStandalone = True,
+                                writerTemplate = "$body$\n" } . toPandoc)
+            "minimal heading levels" $
+              header 2 (text "Header 1") <>
+              header 3 (text "Header 2") <>
+              header 2 (text "Header 1") <>
+              header 4 (text "Header 2") <>
+              header 5 (text "Header 3") <>
+              header 3 (text "Header 2") =?>
+              unlines
+              [ "Header 1"
+              , "========"
               , ""
               , "Header 2"
               , "--------"

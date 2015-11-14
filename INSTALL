@@ -8,8 +8,26 @@ There are also binary installers for Windows and Mac OS X.
 If you are installing the development version from github, see also:
 https://github.com/jgm/pandoc/wiki/Installing-the-development-version-of-pandoc
 
-Quick install
--------------
+Quick install with stack
+------------------------
+
+1.  Install [stack](https://github.com/commercialhaskell/stack/wiki/Downloads).
+
+2.  If you used git to get the pandoc source (as opposed to unpacking
+    a release tarball), do
+
+        git submodule update --init
+
+3.  In the pandoc source directory,
+
+        stack install
+
+    You may be prompted to run `stack setup`, which will automatically
+    download the ghc compiler if needed.
+
+
+Quick install with cabal
+------------------------
 
 1.  Install the [Haskell platform].  This will give you [GHC] and
     the [cabal-install] build tool.
@@ -75,15 +93,12 @@ Quick install
          --extra-include-dirs=/usr/local/Cellar/icu4c/51.1/include \
          -funicode_collation text-icu pandoc-citeproc
 
-The build process will create man pages in `man/man1` and `man/man5`.
+The `pandoc.1` man page will be installed automatically.  cabal shows
+you where it is installed: you may need to set your `MANPATH`
+accordingly. If `README` has been modified, the man page can be
+rebuilt: `make man/pandoc.1`.
 
-To build the `pandoc-citeproc` man pages, go to the pandoc-citeproc
-build directory, and
-
-    cd man
-    make
-
-The man page will be created in the `man1` subdirectory.
+The `pandoc-citeproc.1` man page will also be installed automatically.
 
 [GHC]: http://www.haskell.org/ghc/
 [Haskell platform]: http://hackage.haskell.org/platform/
@@ -122,9 +137,8 @@ assume that the pandoc source directory is your working directory.
     - `embed_data_files`: embed all data files into the binary (default no).
       This is helpful if you want to create a relocatable binary.
       Note:  if this option is selected, you need to install the
-      `hsb2hs` preprocessor:
-
-          cabal install hsb2hs
+      `hsb2hs` preprocessor: `cabal install hsb2hs` (version 0.3.1 or
+      higher is required).
 
     - `https`:  enable support for downloading resources over https
       (using the `http-client` and `http-client-tls` libraries).

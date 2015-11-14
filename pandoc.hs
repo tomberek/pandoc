@@ -58,7 +58,7 @@ import qualified Control.Exception as E
 import Control.Exception.Extensible ( throwIO )
 import qualified Text.Pandoc.UTF8 as UTF8
 import Control.Monad (when, unless, (>=>))
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isNothing)
 import Data.Foldable (foldrM)
 import Network.URI (parseURI, isURI, URI(..))
 import qualified Data.ByteString.Lazy as B
@@ -68,10 +68,10 @@ import qualified Data.Map as M
 import Data.Yaml (decode)
 import qualified Data.Yaml as Yaml
 import qualified Data.Text as T
-import Control.Applicative ((<$>), (<|>))
+import Control.Applicative ((<|>))
 import Text.Pandoc.Readers.Txt2Tags (getT2TMeta)
-import Data.Monoid
-
+import Paths_pandoc (getDataDir)
+import Text.Printf (printf)
 import Text.Pandoc.Error
 
 type Transform = Pandoc -> Pandoc
@@ -80,7 +80,7 @@ copyrightMessage :: String
 copyrightMessage = intercalate "\n" [
   "",
   "Copyright (C) 2006-2015 John MacFarlane",
-  "Web:  http://johnmacfarlane.net/pandoc",
+  "Web:  http://pandoc.org",
   "This is free software; see the source for copying conditions.",
   "There is no warranty, not even for merchantability or fitness",
   "for a particular purpose." ]
@@ -142,12 +142,18 @@ externalFilter f args' d = do
                                          ".php" -> ("php", f:args')
                                          _      -> (f, args')
                                 else err 85 $ "Filter " ++ f ++ " not found"
+      when (f' /= f) $ do
+          mbExe <- findExecutable f'
+          when (isNothing mbExe) $
+            err 83 $ "Error running filter " ++ f ++ "\n" ++
+                      show f' ++ " not found in path."
       (exitcode, outbs, errbs) <- E.handle filterException $
                                     pipeProcess Nothing f' args'' $ encode d
       when (not $ B.null errbs) $ B.hPutStr stderr errbs
       case exitcode of
            ExitSuccess    -> return $ either error id $ eitherDecode' outbs
-           ExitFailure _  -> err 83 $ "Error running filter " ++ f
+           ExitFailure ec -> err 83 $ "Error running filter " ++ f ++ "\n" ++
+                                       "Filter returned error status " ++ show ec
  where filterException :: E.SomeException -> IO a
        filterException e = err 83 $ "Error running filter " ++ f ++ "\n" ++
                                        show e
@@ -829,7 +835,7 @@ options =
                   (\arg opt -> do
                       let url' = case arg of
                                       Just u   -> u
-                                      Nothing  -> "//cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML"
+                                      Nothing  -> "https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML"
                       return opt { optHTMLMathMethod = MathJax url'})
                   "URL")
                  "" -- "Use MathJax for HTML math"
@@ -838,7 +844,7 @@ options =
                   (\arg opt ->
                       return opt
                         { optKaTeXJS =
-                           arg <|> Just "http://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.1.0/katex.min.js"})
+                           arg <|> Just "https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.5.1/katex.min.js"})
                   "URL")
                   "" -- Use KaTeX for HTML Math
 
@@ -873,6 +879,22 @@ options =
                  (NoArg
                   (\opt -> return opt { optVerbose = True }))
                  "" -- "Verbose diagnostic output."
+
+    , Option "" ["bash-completion"]
+                 (NoArg
+                  (\_ -> do
+                     ddir <- getDataDir
+                     tpl <- readDataFileUTF8 Nothing "bash_completion.tpl"
+                     let optnames (Option shorts longs _ _) =
+                           map (\c -> ['-',c]) shorts ++
+                           map ("--" ++) longs
+                     let allopts = unwords (concatMap optnames options)
+                     UTF8.hPutStrLn stdout $ printf tpl allopts
+                         (unwords (map fst readers))
+                         (unwords ("pdf": map fst writers))
+                         ddir
+                     exitWith ExitSuccess ))
+                 "" -- "Print bash completion script"
 
     , Option "v" ["version"]
                  (NoArg
@@ -914,7 +936,7 @@ readMetaValue s = case decode (UTF8.fromString s) of
 usageMessage :: String -> [OptDescr (Opt -> IO Opt)] -> String
 usageMessage programName = usageInfo
   (programName ++ " [OPTIONS] [FILES]" ++ "\nInput formats:  " ++
-  (wrapWords 16 78 $ readers'names) ++ 
+  (wrapWords 16 78 $ readers'names) ++
      '\n' : replicate 16 ' ' ++
      "[ *only Pandoc's JSON version of native AST]" ++ "\nOutput formats: " ++
   (wrapWords 16 78 $ writers'names) ++
@@ -948,7 +970,7 @@ defaultReaderName fallback (x:xs) =
     ".docx"     -> "docx"
     ".t2t"      -> "t2t"
     ".epub"     -> "epub"
-    ".odt"      -> "odt"  -- so we get an "unknown reader" error
+    ".odt"      -> "odt"
     ".pdf"      -> "pdf"  -- so we get an "unknown reader" error
     ".doc"      -> "doc"  -- so we get an "unknown reader" error
     _           -> defaultReaderName fallback xs
@@ -1109,7 +1131,7 @@ main = do
        mapM_ (\arg -> UTF8.hPutStrLn stdout arg) args
        exitWith ExitSuccess
 
-  let csscdn = "http://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.1.0/katex.min.css"
+  let csscdn = "https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.5.1/katex.min.css"
   let mathMethod =
         case (katexJS, katexStylesheet) of
             (Nothing, _) -> mathMethod'
@@ -1151,6 +1173,7 @@ main = do
 
   let laTeXOutput = "latex" `isPrefixOf` writerName' ||
                     "beamer" `isPrefixOf` writerName'
+  let conTeXtOutput = "context" `isPrefixOf` writerName'
 
   writer <- if ".lua" `isSuffixOf` writerName'
                -- note:  use non-lowercased version writerName
@@ -1174,8 +1197,6 @@ main = do
                 Right r  -> return r
                 Left e   -> err 7 e'
                   where e' = case readerName' of
-                                  "odt" -> e ++
-                                    "\nPandoc can convert to ODT, but not from ODT.\nTry using LibreOffice to export as HTML, and convert that with pandoc."
                                   "pdf" -> e ++
                                      "\nPandoc can convert to PDF, but not from PDF."
                                   "doc" -> e ++
@@ -1236,7 +1257,7 @@ main = do
                                 _ -> Nothing
 
   let readerOpts = def{ readerSmart = smart || (texLigatures &&
-                          (laTeXOutput || "context" `isPrefixOf` writerName'))
+                          (laTeXOutput || conTeXtOutput))
                       , readerStandalone = standalone'
                       , readerParseRaw = parseRaw
                       , readerColumns = columns
@@ -1347,17 +1368,20 @@ main = do
     PureStringWriter f
       | pdfOutput -> do
               -- make sure writer is latex or beamer
-              unless laTeXOutput $
+              unless (laTeXOutput || conTeXtOutput) $
                 err 47 $ "cannot produce pdf output with " ++ writerName' ++
                          " writer"
 
+              let texprog = if conTeXtOutput
+                              then "context"
+                              else latexEngine
               -- check for latex program
-              mbLatex <- findExecutable latexEngine
+              mbLatex <- findExecutable texprog
               when (mbLatex == Nothing) $
-                   err 41 $ latexEngine ++ " not found. " ++
-                     latexEngine ++ " is needed for pdf output."
+                   err 41 $ texprog ++ " not found. " ++
+                     texprog ++ " is needed for pdf output."
 
-              res <- makePDF latexEngine f writerOptions doc'
+              res <- makePDF texprog f writerOptions doc'
               case res of
                    Right pdf -> writeBinary pdf
                    Left err' -> do

@@ -35,13 +35,11 @@ import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Lazy.Char8 as BL8
 import qualified Data.Map as M
 import qualified Text.Pandoc.UTF8 as UTF8
-import Text.Pandoc.Compat.Monoid ((<>))
 import Codec.Archive.Zip
 import Data.Time.Clock.POSIX
 import Data.Time.Clock
-import Data.Time.Format
 import System.Environment
-import Text.Pandoc.Compat.Locale (defaultTimeLocale)
+import Text.Pandoc.Compat.Time
 import Text.Pandoc.Definition
 import Text.Pandoc.Generic
 import Text.Pandoc.ImageSize
@@ -62,9 +60,10 @@ import Data.Unique (hashUnique, newUnique)
 import System.Random (randomRIO)
 import Text.Printf (printf)
 import qualified Control.Exception as E
+import Text.Pandoc.Compat.Monoid ((<>))
 import Text.Pandoc.MIME (MimeType, getMimeType, getMimeTypeDef,
                          extensionFromMimeType)
-import Control.Applicative ((<$>), (<|>), (<*>))
+import Control.Applicative ((<|>))
 import Data.Maybe (fromMaybe, mapMaybe, maybeToList)
 import Data.Char (ord)
 
@@ -181,8 +180,8 @@ renumIds f renumMap = map (renumId f renumMap)
 
 -- | Certain characters are invalid in XML even if escaped.
 -- See #1992
-stripInvalidChars :: Pandoc -> Pandoc
-stripInvalidChars = bottomUp (filter isValidChar)
+stripInvalidChars :: String -> String
+stripInvalidChars = filter isValidChar
 
 -- | See XML reference
 isValidChar :: Char -> Bool
@@ -208,14 +207,13 @@ writeDocx :: WriterOptions  -- ^ Writer options
           -> IO BL.ByteString
 writeDocx opts doc@(Pandoc meta _) = do
   let datadir = writerUserDataDir opts
-  let doc' = stripInvalidChars . walk fixDisplayMath $ doc
+  let doc' = walk fixDisplayMath $ doc
   username <- lookup "USERNAME" <$> getEnvironment
   utctime <- getCurrentTime
-  refArchive <- liftM (toArchive . toLazy) $
-       case writerReferenceDocx opts of
-             Just f  -> B.readFile f
-             Nothing -> readDataFile datadir "reference.docx"
-  distArchive <- liftM (toArchive . toLazy) $ readDataFile datadir "reference.docx"
+  distArchive <- getDefaultReferenceDocx datadir
+  refArchive <- case writerReferenceDocx opts of
+                     Just f  -> liftM (toArchive . toLazy) $ B.readFile f
+                     Nothing -> getDefaultReferenceDocx datadir
 
   parsedDoc <- parseXml refArchive distArchive "word/document.xml"
   let wname f qn = qPrefix qn == Just "w" && f (qName qn)
@@ -474,7 +472,7 @@ writeDocx opts doc@(Pandoc meta _) = do
   settingsEntry <- copyChildren refArchive distArchive settingsPath epochtime settingsList
 
   let entryFromArchive arch path =
-         maybe (fail $ path ++ " corrupt or missing in reference docx")
+         maybe (fail $ path ++ " missing in reference docx")
                return
                (findEntryByPath path arch `mplus` findEntryByPath path distArchive)
   docPropsAppEntry <- entryFromArchive refArchive "docProps/app.xml"
@@ -975,7 +973,7 @@ formattedString str = do
   return [ mknode "w:r" [] $
              props ++
              [ mknode (if inDel then "w:delText" else "w:t")
-               [("xml:space","preserve")] str ] ]
+               [("xml:space","preserve")] (stripInvalidChars str) ] ]
 
 setFirstPara :: WS ()
 setFirstPara =  modify $ \s -> s { stFirstPara = True }
@@ -1204,11 +1202,12 @@ defaultFootnotes = [ mknode "w:footnote"
 
 parseXml :: Archive -> Archive -> String -> IO Element
 parseXml refArchive distArchive relpath =
-  case ((findEntryByPath relpath refArchive `mplus`
-         findEntryByPath relpath distArchive)
-         >>= parseXMLDoc . UTF8.toStringLazy . fromEntry) of
-            Just d  -> return d
-            Nothing -> fail $ relpath ++ " corrupt or missing in reference docx"
+  case findEntryByPath relpath refArchive `mplus`
+         findEntryByPath relpath distArchive of
+            Nothing -> fail $ relpath ++ " missing in reference docx"
+            Just e  -> case parseXMLDoc . UTF8.toStringLazy . fromEntry $ e of
+                       Nothing -> fail $ relpath ++ " corrupt in reference docx"
+                       Just d  -> return d
 
 -- | Scales the image to fit the page
 -- sizes are passed in emu
@@ -1219,3 +1218,4 @@ fitToPage (x, y) pageWidth
     (pageWidth, round $
       ((fromIntegral pageWidth) / ((fromIntegral :: Integer -> Double) x)) * (fromIntegral y))
   | otherwise = (x, y)
+

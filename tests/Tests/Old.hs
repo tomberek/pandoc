@@ -105,6 +105,8 @@ tests = [ testGroup "markdown"
           [ testGroup "writer" $ writerTests "docbook"
           , test "reader" ["-r", "docbook", "-w", "native", "-s"]
             "docbook-reader.docbook" "docbook-reader.native"
+          , test "reader" ["-r", "docbook", "-w", "native", "-s"]
+            "docbook-xref.docbook" "docbook-xref.native"
           ]
         , testGroup "native"
           [ testGroup "writer" $ writerTests "native"
@@ -163,6 +165,12 @@ tests = [ testGroup "markdown"
           [ "opendocument" , "context" , "texinfo", "icml"
           , "man" , "plain" , "rtf", "org", "asciidoc"
           ]
+        , testGroup "writers-lang-and-dir"
+          [ test "latex" ["-f", "native", "-t", "latex", "-s"]
+            "writers-lang-and-dir.native" "writers-lang-and-dir.latex"
+          , test "context" ["-f", "native", "-t", "context", "-s"]
+            "writers-lang-and-dir.native" "writers-lang-and-dir.context"
+          ]
         ]
 
 -- makes sure file is fully closed after reading
@@ -194,7 +202,8 @@ writerTests format
     , test "tables" opts             "tables.native"    ("tables" <.> format)
     ]
   where
-    opts = ["-r", "native", "-w", format, "--columns=78"]
+    opts = ["-r", "native", "-w", format, "--columns=78",
+            "--variable", "pandoc-version="]
 
 s5WriterTest :: String -> [String] -> String -> Test
 s5WriterTest modifier opts format

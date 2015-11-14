@@ -50,20 +50,22 @@ import Text.Pandoc.Options (ReaderOptions(readerParseRaw, readerTrace)
                                Ext_native_divs, Ext_native_spans))
 import Text.Pandoc.Parsing hiding ((<|>))
 import Text.Pandoc.Walk
+import qualified Data.Map as M
 import Data.Maybe ( fromMaybe, isJust)
 import Data.List ( intercalate, isInfixOf, isPrefixOf, isSuffixOf )
 import Data.Char ( isDigit )
 import Control.Monad ( liftM, guard, when, mzero, void, unless )
 import Control.Arrow ((***))
-import Control.Applicative ( (<$>), (<$), (<*), (*>), (<|>))
-import Data.Monoid (mconcat, Monoid, mempty, (<>), First (..))
+import Control.Applicative ( (<|>) )
+import Data.Monoid (First (..))
 import Text.Printf (printf)
 import Debug.Trace (trace)
 import Data.Default (Default (..), def)
 import Control.Monad.Reader (Reader,ask, asks, local, runReader)
 import Network.URI (isURI)
 import Text.Pandoc.Error
-
+import Text.Pandoc.CSS (foldOrElse, pickStyleAttrProps)
+import Text.Pandoc.Compat.Monoid ((<>))
 import Text.Parsec.Error
 
 
@@ -73,8 +75,9 @@ readHtml :: ReaderOptions -- ^ Reader options
          -> Either PandocError Pandoc
 readHtml opts inp =
     mapLeft (ParseFailure . getError) . flip runReader def $
-      runParserT parseDoc (HTMLState def{ stateOptions = opts } [] Nothing)
-             "source" tags
+      runParserT parseDoc
+        (HTMLState def{ stateOptions = opts } [] Nothing [] M.empty)
+        "source" tags
     where tags = stripPrefixes . canonicalizeTags $
                    parseTagsOptions parseOptions{ optTagPosition = True } inp
           parseDoc = do
@@ -99,7 +102,9 @@ data HTMLState =
   HTMLState
   {  parserState :: ParserState,
      noteTable   :: [(String, Blocks)],
-     baseHref    :: Maybe String
+     baseHref    :: Maybe String,
+     identifiers :: [String],
+     headerMap   :: M.Map Inlines String
   }
 
 data HTMLLocal = HTMLLocal { quoteContext :: QuoteContext
@@ -251,6 +256,22 @@ pListItem nonItem = do
   let liDiv = maybe mempty (\x -> B.divWith (x, [], []) mempty) (lookup "id" attr)
   (liDiv <>) <$> pInTags "li" block <* skipMany nonItem
 
+parseListStyleType :: String -> ListNumberStyle
+parseListStyleType "lower-roman" = LowerRoman
+parseListStyleType "upper-roman" = UpperRoman
+parseListStyleType "lower-alpha" = LowerAlpha
+parseListStyleType "upper-alpha" = UpperAlpha
+parseListStyleType "decimal"     = Decimal
+parseListStyleType _             = DefaultStyle
+
+parseTypeAttr :: String -> ListNumberStyle
+parseTypeAttr "i" = LowerRoman
+parseTypeAttr "I" = UpperRoman
+parseTypeAttr "a" = LowerAlpha
+parseTypeAttr "A" = UpperAlpha
+parseTypeAttr "1" = Decimal
+parseTypeAttr _   = DefaultStyle
+
 pOrderedList :: TagParser Blocks
 pOrderedList = try $ do
   TagOpen _ attribs <- pSatisfy (~== TagOpen "ol" [])
@@ -260,16 +281,19 @@ pOrderedList = try $ do
                              sta' = if all isDigit sta
                                        then read sta
                                        else 1
-                             sty = fromMaybe (fromMaybe "" $
-                                   lookup "style" attribs) $
-                                   lookup "class" attribs
-                             sty' = case sty of
-                                     "lower-roman"  -> LowerRoman
-                                     "upper-roman"  -> UpperRoman
-                                     "lower-alpha"  -> LowerAlpha
-                                     "upper-alpha"  -> UpperAlpha
-                                     "decimal"      -> Decimal
-                                     _              -> DefaultStyle
+
+                             pickListStyle = pickStyleAttrProps ["list-style-type", "list-style"]
+
+                             typeAttr  = fromMaybe "" $ lookup "type"  attribs
+                             classAttr = fromMaybe "" $ lookup "class" attribs
+                             styleAttr = fromMaybe "" $ lookup "style" attribs
+                             listStyle = fromMaybe "" $ pickListStyle styleAttr
+
+                             sty' = foldOrElse DefaultStyle
+                                      [ parseTypeAttr      typeAttr
+                                      , parseListStyleType classAttr
+                                      , parseListStyleType listStyle
+                                      ]
   let nonItem = pSatisfy (\t ->
                   not (tagOpen (`elem` ["li","ol","ul","dl"]) (const True) t) &&
                   not (t ~== TagClose "ol"))
@@ -322,9 +346,16 @@ pRawTag = do
 pDiv :: TagParser Blocks
 pDiv = try $ do
   guardEnabled Ext_native_divs
-  TagOpen _ attr <- lookAhead $ pSatisfy $ tagOpen (=="div") (const True)
-  contents <- pInTags "div" block
-  return $ B.divWith (mkAttr attr) contents
+  let isDivLike "div" = True
+      isDivLike "section" = True
+      isDivLike _ = False
+  TagOpen tag attr <- lookAhead $ pSatisfy $ tagOpen isDivLike (const True)
+  contents <- pInTags tag block
+  let (ident, classes, kvs) = mkAttr attr
+  let classes' = if tag == "section"
+                    then "section":classes
+                    else classes
+  return $ B.divWith (ident, classes', kvs) contents
 
 pRawHtmlBlock :: TagParser Blocks
 pRawHtmlBlock = do
@@ -377,9 +408,10 @@ pHeader = try $ do
   let ident = fromMaybe "" $ lookup "id" attr
   let classes = maybe [] words $ lookup "class" attr
   let keyvals = [(k,v) | (k,v) <- attr, k /= "class", k /= "id"]
+  attr' <- registerHeader (ident, classes, keyvals) contents
   return $ if bodyTitle
               then mempty  -- skip a representation of the title in the body
-              else B.headerWith (ident, classes, keyvals) level contents
+              else B.headerWith attr' level contents
 
 pHrule :: TagParser Blocks
 pHrule = do
@@ -614,12 +646,11 @@ pSpan = try $ do
   guardEnabled Ext_native_spans
   TagOpen _ attr <- lookAhead $ pSatisfy $ tagOpen (=="span") (const True)
   contents <- pInTags "span" inline
-  let attr' = mkAttr attr
-  return $ case attr' of
-                ("",[],[("style",s)])
-                  | filter (`notElem` " \t;") s == "font-variant:small-caps" ->
-                     B.smallcaps contents
-                _ -> B.spanWith (mkAttr attr) contents
+  let isSmallCaps = fontVariant == "small-caps"
+                    where styleAttr   = fromMaybe "" $ lookup "style" attr
+                          fontVariant = fromMaybe "" $ pickStyleAttrProps ["font-variant"] styleAttr
+  let tag = if isSmallCaps then B.smallcaps else B.spanWith (mkAttr attr)
+  return $ tag contents
 
 pRawHtmlInline :: TagParser Inlines
 pRawHtmlInline = do
@@ -843,6 +874,7 @@ isCommentTag = tagComment (const True)
 closes :: String -> String -> Bool
 _ `closes` "body" = False
 _ `closes` "html" = False
+"body" `closes` "head" = True
 "a" `closes` "a" = True
 "li" `closes` "li" = True
 "th" `closes` t | t `elem` ["th","td"] = True
@@ -899,9 +931,13 @@ htmlTag :: Monad m
 htmlTag f = try $ do
   lookAhead (char '<')
   inp <- getInput
-  let (next : _) = canonicalizeTags $ parseTags inp
+  let hasTagWarning (TagWarning _:_) = True
+      hasTagWarning _ = False
+  let (next : rest) = canonicalizeTags $ parseTagsOptions
+                       parseOptions{ optTagWarning = True } inp
   guard $ f next
   case next of
+       TagWarning _ -> fail "encountered TagWarning"
        TagComment s
          | "<!--" `isPrefixOf` inp -> do
           count (length s + 4) anyChar
@@ -910,6 +946,10 @@ htmlTag f = try $ do
           return (next, "<!--" ++ s ++ "-->")
          | otherwise -> fail "bogus comment mode, HTML5 parse error"
        _            -> do
+          -- we get a TagWarning on things like
+          -- <www.boe.es/buscar/act.php?id=BOE-A-1996-8930#a66>
+          -- which should NOT be parsed as an HTML tag, see #2277
+          guard $ not $ hasTagWarning rest
           rendered <- manyTill anyChar (char '>')
           return (next, rendered ++ ">")
 
@@ -945,6 +985,14 @@ isSpace _    = False
 
 -- Instances
 
+instance HasIdentifierList HTMLState where
+  extractIdentifierList = identifiers
+  updateIdentifierList f s = s{ identifiers = f (identifiers s) }
+
+instance HasHeaderMap HTMLState where
+  extractHeaderMap = headerMap
+  updateHeaderMap  f s = s{ headerMap = f (headerMap s) }
+
 -- This signature should be more general
 -- MonadReader HTMLLocal m => HasQuoteContext st m
 instance HasQuoteContext st (Reader HTMLLocal) where
@@ -953,9 +1001,6 @@ instance HasQuoteContext st (Reader HTMLLocal) where
 
 instance HasReaderOptions HTMLState where
     extractReaderOptions = extractReaderOptions . parserState
-
-instance Default HTMLState where
-  def = HTMLState def [] Nothing
 
 instance HasMeta HTMLState where
   setMeta s b st = st {parserState = setMeta s b $ parserState st}

@@ -36,7 +36,6 @@ import Text.Pandoc.XML
 import Text.Pandoc.Templates (renderTemplate')
 import Text.Pandoc.Pretty
 import Text.Printf ( printf )
-import Control.Applicative ( (<$>) )
 import Control.Arrow ( (***), (>>>) )
 import Control.Monad.State hiding ( when )
 import Data.Char (chr, isDigit)
@@ -377,7 +376,7 @@ inlineToOpenDocument :: WriterOptions -> Inline -> State WriterState Doc
 inlineToOpenDocument o ils
     | Space         <- ils = inTextStyle space
     | Span _ xs     <- ils = inlinesToOpenDocument o xs
-    | LineBreak     <- ils = return $ selfClosingTag "text:line-break" [] <> cr
+    | LineBreak     <- ils = return $ selfClosingTag "text:line-break" []
     | Str         s <- ils = inTextStyle $ handleSpaces $ escapeStringForXML s
     | Emph        l <- ils = withTextStyle Italic $ inlinesToOpenDocument o l
     | Strong      l <- ils = withTextStyle Bold   $ inlinesToOpenDocument o l

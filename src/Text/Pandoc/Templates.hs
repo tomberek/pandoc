@@ -98,11 +98,10 @@ import Control.Monad (guard, when)
 import Data.Aeson (ToJSON(..), Value(..))
 import qualified Text.Parsec as P
 import Text.Parsec.Text (Parser)
-import Control.Applicative
+import Text.Pandoc.Compat.Monoid ((<>))
 import qualified Data.Text as T
 import Data.Text (Text)
 import Data.Text.Encoding (encodeUtf8)
-import Text.Pandoc.Compat.Monoid ((<>), Monoid(..))
 import Data.List (intersperse)
 import System.FilePath ((</>), (<.>))
 import qualified Data.Map as M
@@ -112,8 +111,9 @@ import qualified Control.Exception.Extensible as E (try, IOException)
 import Text.Blaze.Html (Html)
 import Text.Blaze.Internal (preEscapedText)
 import Data.ByteString.Lazy (ByteString, fromChunks)
-import Data.Vector ((!?))
 import Text.Pandoc.Shared (ordNub)
+import Data.Vector ((!?))
+import Control.Applicative (many, (<|>))
 
 -- | Get default template for the specified writer.
 getDefaultTemplate :: (Maybe FilePath) -- ^ User data directory to search first

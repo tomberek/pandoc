@@ -77,10 +77,10 @@ where
 import Data.Sequence (Seq, fromList, (<|), singleton, mapWithIndex, viewl, ViewL(..))
 import Data.Foldable (toList)
 import Data.List (intercalate)
-import Data.Monoid
 import Data.String
 import Control.Monad.State
 import Data.Char (isSpace)
+import Text.Pandoc.Compat.Monoid ((<>))
 
 data RenderState a = RenderState{
          output       :: [a]        -- ^ In reverse order

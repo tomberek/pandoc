@@ -31,6 +31,7 @@ Conversion of 'Pandoc' documents to HTML.
 -}
 module Text.Pandoc.Writers.HTML ( writeHtml , writeHtmlString ) where
 import Text.Pandoc.Definition
+import Text.Pandoc.Compat.Monoid ((<>))
 import Text.Pandoc.Shared
 import Text.Pandoc.Writers.Shared
 import Text.Pandoc.Options
@@ -53,9 +54,7 @@ import Text.XML.Light.Output
 import Text.XML.Light (unode, elChildren, unqual)
 import qualified Text.XML.Light as XML
 import System.FilePath (takeExtension)
-import Data.Monoid
 import Data.Aeson (Value)
-import Control.Applicative ((<$>))
 
 data WriterState = WriterState
     { stNotes            :: [Html]  -- ^ List of notes
@@ -139,6 +138,9 @@ pandocToHtml opts (Pandoc meta blocks) = do
                   defField "revealjs-url" ("reveal.js" :: String) $
                   defField "s5-url" ("s5/default" :: String) $
                   defField "html5" (writerHtml5 opts) $
+                  defField "center" (case lookupMeta "center" meta of
+                                          Just (MetaBool False) -> False
+                                          _                     -> True) $
                   metadata
   return (thebody, context)
 
@@ -317,8 +319,8 @@ obfuscateLink opts (renderHtml -> txt) s =
               (linkText, altText) =
                  if txt == drop 7 s' -- autolink
                     then ("e", name' ++ " at " ++ domain')
-                    else ("'" ++ txt ++ "'", txt ++ " (" ++ name' ++ " at " ++
-                          domain' ++ ")")
+                    else ("'" ++ obfuscateString txt ++ "'",
+                          txt ++ " (" ++ name' ++ " at " ++ domain' ++ ")")
           in  case meth of
                 ReferenceObfuscation ->
                      -- need to use preEscapedString or &'s are escaped to &amp; in URL
@@ -390,19 +392,24 @@ blockToHtml opts (Para [Image txt (s,'f':'i':'g':':':tit)]) = do
 blockToHtml opts (Para lst) = do
   contents <- inlineListToHtml opts lst
   return $ H.p contents
-blockToHtml opts (Div attr@(_,classes,_) bs) = do
+blockToHtml opts (Div attr@(ident, classes, kvs) bs) = do
   let speakerNotes = "notes" `elem` classes
   -- we don't want incremental output inside speaker notes, see #1394
   let opts' = if speakerNotes then opts{ writerIncremental = False } else opts
   contents <- blockListToHtml opts' bs
   let contents' = nl opts >> contents >> nl opts
+  let (divtag, classes') = if writerHtml5 opts && "section" `elem` classes
+                              then (H5.section, filter (/= "section") classes)
+                              else (H.div, classes)
   return $
      if speakerNotes
         then case writerSlideVariant opts of
                   RevealJsSlides -> addAttrs opts' attr $ H5.aside $ contents'
+                  DZSlides       -> (addAttrs opts' attr $ H5.div $ contents')
+                                      ! (H5.customAttribute "role" "note")
                   NoSlides       -> addAttrs opts' attr $ H.div $ contents'
                   _              -> mempty
-        else addAttrs opts attr $ H.div $ contents'
+        else addAttrs opts (ident, classes', kvs) $ divtag $ contents'
 blockToHtml opts (RawBlock f str)
   | f == Format "html" = return $ preEscapedString str
   | otherwise          = return mempty
@@ -523,8 +530,15 @@ blockToHtml opts (Table capt aligns widths headers rows') = do
                 return $ H.thead (nl opts >> contents) >> nl opts
   body' <- liftM (\x -> H.tbody (nl opts >> mconcat x)) $
                zipWithM (tableRowToHtml opts aligns) [1..] rows'
-  return $ H.table $ nl opts >> captionDoc >> coltags >> head' >>
-                   body' >> nl opts
+  let tbl = H.table $
+              nl opts >> captionDoc >> coltags >> head' >> body' >> nl opts
+  let totalWidth = sum widths
+  -- When widths of columns are < 100%, we need to set width for the whole
+  -- table, or some browsers give us skinny columns with lots of space between:
+  return $ if totalWidth == 0 || totalWidth == 1
+              then tbl
+              else tbl ! A.style (toValue $ "width:" ++
+                              show (round (totalWidth * 100) :: Int) ++ "%;")
 
 tableRowToHtml :: WriterOptions
                -> [Alignment]

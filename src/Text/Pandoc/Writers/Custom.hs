@@ -44,7 +44,6 @@ import Scripting.Lua (LuaState, StackValue, callfunc)
 import Text.Pandoc.Writers.Shared
 import qualified Scripting.Lua as Lua
 import qualified Text.Pandoc.UTF8 as UTF8
-import Data.Monoid
 import Control.Monad (when)
 import Control.Exception
 import qualified Data.Map as M
@@ -57,18 +56,18 @@ attrToMap (id',classes,keyvals) = M.fromList
     : ("class", unwords classes)
     : keyvals
 
-getList :: StackValue a => LuaState -> Int -> IO [a]
-getList lua i' = do
-  continue <- Lua.next lua i'
-  if continue
-     then do
-       next <- Lua.peek lua (-1)
-       Lua.pop lua 1
-       x <- maybe (fail "peek returned Nothing") return next
-       rest <- getList lua i'
-       return (x : rest)
-     else return []
-
+#if MIN_VERSION_hslua(0,4,0)
+#if MIN_VERSION_base(4,8,0)
+instance {-# OVERLAPS #-} StackValue [Char] where
+#else
+instance StackValue [Char] where
+#endif
+  push lua cs = Lua.push lua (UTF8.fromString cs)
+  peek lua i = do
+                 res <- Lua.peek lua i
+                 return $ UTF8.toString `fmap` res
+  valuetype _ = Lua.TSTRING
+#else
 #if MIN_VERSION_base(4,8,0)
 instance {-# OVERLAPS #-} StackValue a => StackValue [a] where
 #else
@@ -86,6 +85,19 @@ instance StackValue a => StackValue [a] where
     Lua.pop lua 1
     return (Just lst)
   valuetype _ = Lua.TTABLE
+
+getList :: StackValue a => LuaState -> Int -> IO [a]
+getList lua i' = do
+  continue <- Lua.next lua i'
+  if continue
+     then do
+       next <- Lua.peek lua (-1)
+       Lua.pop lua 1
+       x <- maybe (fail "peek returned Nothing") return next
+       rest <- getList lua i'
+       return (x : rest)
+     else return []
+#endif
 
 instance StackValue Format where
   push lua (Format f) = Lua.push lua (map toLower f)
@@ -111,12 +123,20 @@ instance (StackValue a, StackValue b) => StackValue (a,b) where
   peek _ _ = undefined -- not needed for our purposes
   valuetype _ = Lua.TTABLE
 
+#if MIN_VERSION_base(4,8,0)
+instance {-# OVERLAPS #-} StackValue [Inline] where
+#else
 instance StackValue [Inline] where
+#endif
   push l ils = Lua.push l =<< inlineListToCustom l ils
   peek _ _ = undefined
   valuetype _ = Lua.TSTRING
 
+#if MIN_VERSION_base(4,8,0)
+instance {-# OVERLAPS #-} StackValue [Block] where
+#else
 instance StackValue [Block] where
+#endif
   push l ils = Lua.push l =<< blockListToCustom l ils
   peek _ _ = undefined
   valuetype _ = Lua.TSTRING
@@ -167,7 +187,11 @@ writeCustom luaFile opts doc@(Pandoc meta _) = do
   -- check for error in lua script (later we'll change the return type
   -- to handle this more gracefully):
   when (status /= 0) $
+#if MIN_VERSION_hslua(0,4,0)
+    Lua.tostring lua 1 >>= throw . PandocLuaException . UTF8.toString
+#else
     Lua.tostring lua 1 >>= throw . PandocLuaException
+#endif
   Lua.call lua 0 0
   -- TODO - call hierarchicalize, so we have that info
   rendered <- docToCustom lua opts doc

@@ -2,7 +2,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses, FlexibleContexts, FlexibleInstances #-}
 {-
-Copyright (C) 2014-2015 Albert Krewinkel <tarleb@moltkeplatz.de>
+Copyright (C) 2014-2015 Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -21,19 +21,20 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
 {- |
    Module      : Text.Pandoc.Readers.Org
-   Copyright   : Copyright (C) 2014 Albert Krewinkel
+   Copyright   : Copyright (C) 2014-2015 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
-   Maintainer  : Albert Krewinkel <tarleb@moltkeplatz.de>
+   Maintainer  : Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
 
 Conversion of org-mode formatted plain text to 'Pandoc' document.
 -}
 module Text.Pandoc.Readers.Org ( readOrg ) where
 
 import qualified Text.Pandoc.Builder as B
-import           Text.Pandoc.Builder ( Inlines, Blocks, HasMeta(..), (<>)
-                                     , trimInlines )
+import           Text.Pandoc.Builder ( Inlines, Blocks, HasMeta(..),
+                                       trimInlines )
 import           Text.Pandoc.Definition
+import           Text.Pandoc.Compat.Monoid ((<>))
 import           Text.Pandoc.Options
 import qualified Text.Pandoc.Parsing as P
 import           Text.Pandoc.Parsing hiding ( F, unF, askF, asksF, runF
@@ -65,6 +66,14 @@ data OrgParserLocal = OrgParserLocal { orgLocalQuoteContext :: QuoteContext }
 
 type OrgParser = ParserT [Char] OrgParserState (Reader OrgParserLocal)
 
+instance HasIdentifierList OrgParserState where
+  extractIdentifierList = orgStateIdentifiers
+  updateIdentifierList f s = s{ orgStateIdentifiers = f (orgStateIdentifiers s) }
+
+instance HasHeaderMap OrgParserState where
+  extractHeaderMap = orgStateHeaderMap
+  updateHeaderMap  f s = s{ orgStateHeaderMap = f (orgStateHeaderMap s) }
+
 parseOrg :: OrgParser Pandoc
 parseOrg = do
   blocks' <- parseBlocks
@@ -79,13 +88,21 @@ dropCommentTrees [] = []
 dropCommentTrees blks@(b:bs) =
   maybe blks (flip dropUntilHeaderAboveLevel bs) $ commentHeaderLevel b
 
--- | Return the level of a header starting a comment tree and Nothing
--- otherwise.
+-- | Return the level of a header starting a comment or :noexport: tree and
+--  Nothing otherwise.
 commentHeaderLevel :: Block -> Maybe Int
 commentHeaderLevel blk =
    case blk of
-     (Header level _ ((Str "COMMENT"):_)) -> Just level
-     _                                    -> Nothing
+     (Header level _ ((Str "COMMENT"):_))          -> Just level
+     (Header level _ title) | hasNoExportTag title -> Just level
+     _                                             -> Nothing
+ where
+   hasNoExportTag :: [Inline] -> Bool
+   hasNoExportTag = any isNoExportTag
+
+   isNoExportTag :: Inline -> Bool
+   isNoExportTag (Span ("", ["tag"], [("data-tag-name", "noexport")]) []) = True
+   isNoExportTag _ = False
 
 -- | Drop blocks until a header on or above the given level is seen
 dropUntilHeaderAboveLevel :: Int -> [Block] -> [Block]
@@ -122,6 +139,9 @@ data OrgParserState = OrgParserState
                       , orgStateMeta                 :: Meta
                       , orgStateMeta'                :: F Meta
                       , orgStateNotes'               :: OrgNoteTable
+                      , orgStateParserContext        :: ParserContext
+                      , orgStateIdentifiers          :: [String]
+                      , orgStateHeaderMap            :: M.Map Inlines String
                       }
 
 instance Default OrgParserLocal where
@@ -161,24 +181,14 @@ defaultOrgParserState = OrgParserState
                         , orgStateMeta = nullMeta
                         , orgStateMeta' = return nullMeta
                         , orgStateNotes' = []
+                        , orgStateParserContext = NullState
+                        , orgStateIdentifiers = []
+                        , orgStateHeaderMap = M.empty
                         }
 
 recordAnchorId :: String -> OrgParser ()
 recordAnchorId i = updateState $ \s ->
   s{ orgStateAnchorIds = i : (orgStateAnchorIds s) }
-
-addBlockAttribute :: String -> String -> OrgParser ()
-addBlockAttribute key val = updateState $ \s ->
-  let attrs = orgStateBlockAttributes s
-  in s{ orgStateBlockAttributes = M.insert key val attrs }
-
-lookupBlockAttribute :: String -> OrgParser (Maybe String)
-lookupBlockAttribute key =
-  M.lookup key . orgStateBlockAttributes <$> getState
-
-resetBlockAttributes :: OrgParser ()
-resetBlockAttributes = updateState $ \s ->
-  s{ orgStateBlockAttributes = orgStateBlockAttributes def }
 
 updateLastForbiddenCharPos :: OrgParser ()
 updateLastForbiddenCharPos = getPosition >>= \p ->
@@ -282,6 +292,23 @@ blanklines =
        <* updateLastPreCharPos
        <* updateLastForbiddenCharPos
 
+-- | Succeeds when we're in list context.
+inList :: OrgParser ()
+inList = do
+  ctx <- orgStateParserContext <$> getState
+  guard (ctx == ListItemState)
+
+-- | Parse in different context
+withContext :: ParserContext -- ^ New parser context
+            -> OrgParser a   -- ^ Parser to run in that context
+            -> OrgParser a
+withContext context parser = do
+  oldContext <- orgStateParserContext <$> getState
+  updateState $ \s -> s{ orgStateParserContext = context }
+  result <- parser
+  updateState $ \s -> s{ orgStateParserContext = oldContext }
+  return result
+
 --
 -- parsing blocks
 --
@@ -307,9 +334,18 @@ block = choice [ mempty <$ blanklines
                , paraOrPlain
                ] <?> "block"
 
+--
+-- Block Attributes
+--
+
+-- | Parse optional block attributes (like #+TITLE or #+NAME)
 optionalAttributes :: OrgParser (F Blocks) -> OrgParser (F Blocks)
 optionalAttributes parser = try $
   resetBlockAttributes *> parseBlockAttributes *> parser
+ where
+   resetBlockAttributes :: OrgParser ()
+   resetBlockAttributes = updateState $ \s ->
+     s{ orgStateBlockAttributes = orgStateBlockAttributes def }
 
 parseBlockAttributes :: OrgParser ()
 parseBlockAttributes = do
@@ -333,6 +369,15 @@ lookupInlinesAttr attr = try $ do
   maybe (return Nothing)
         (fmap Just . parseFromString parseInlines)
         val
+
+addBlockAttribute :: String -> String -> OrgParser ()
+addBlockAttribute key val = updateState $ \s ->
+  let attrs = orgStateBlockAttributes s
+  in s{ orgStateBlockAttributes = M.insert key val attrs }
+
+lookupBlockAttribute :: String -> OrgParser (Maybe String)
+lookupBlockAttribute key =
+  M.lookup key . orgStateBlockAttributes <$> getState
 
 
 --
@@ -379,7 +424,7 @@ verseBlock blkProp = try $ do
   ignHeaders
   content <- rawBlockContent blkProp
   fmap B.para . mconcat . intersperse (pure B.linebreak)
-    <$> mapM (parseFromString parseInlines) (lines content)
+    <$> mapM (parseFromString parseInlines) (map (++ "\n") . lines $ content)
 
 exportsCode :: [(String, String)] -> Bool
 exportsCode attrs = not (("rundoc-exports", "none") `elem` attrs
@@ -389,11 +434,11 @@ exportsResults :: [(String, String)] -> Bool
 exportsResults attrs = ("rundoc-exports", "results") `elem` attrs
                        || ("rundoc-exports", "both") `elem` attrs
 
-followingResultsBlock :: OrgParser (Maybe String)
+followingResultsBlock :: OrgParser (Maybe (F Blocks))
 followingResultsBlock =
        optionMaybe (try $ blanklines *> stringAnyCase "#+RESULTS:"
                                      *> blankline
-                                     *> (unlines <$> many1 exampleLine))
+                                     *> block)
 
 codeBlock :: BlockProperties -> OrgParser (F Blocks)
 codeBlock blkProp = do
@@ -408,7 +453,7 @@ codeBlock blkProp = do
   labelledBlck      <- maybe (pure codeBlck)
                              (labelDiv codeBlck)
                              <$> lookupInlinesAttr "caption"
-  let resultBlck     = pure $ maybe mempty (exampleCode) resultsContent
+  let resultBlck     = fromMaybe mempty resultsContent
   return $ (if includeCode then labelledBlck else mempty)
            <> (if includeResults then resultBlck else mempty)
  where
@@ -486,10 +531,16 @@ rundocBlockClass :: String
 rundocBlockClass = rundocPrefix ++ "block"
 
 blockOption :: OrgParser (String, String)
-blockOption = try $ (,) <$> orgArgKey <*> orgParamValue
+blockOption = try $ do
+  argKey <- orgArgKey
+  paramValue <- option "yes" orgParamValue
+  return (argKey, paramValue)
 
 inlineBlockOption :: OrgParser (String, String)
-inlineBlockOption = try $ (,) <$> orgArgKey <*> orgInlineParamValue
+inlineBlockOption = try $ do
+  argKey <- orgArgKey
+  paramValue <- option "yes" orgInlineParamValue
+  return (argKey, paramValue)
 
 orgArgKey :: OrgParser String
 orgArgKey = try $
@@ -498,11 +549,17 @@ orgArgKey = try $
 
 orgParamValue :: OrgParser String
 orgParamValue = try $
-  skipSpaces *> many1 (noneOf "\t\n\r ") <* skipSpaces
+  skipSpaces
+    *> notFollowedBy (char ':' )
+    *> many1 (noneOf "\t\n\r ")
+    <* skipSpaces
 
 orgInlineParamValue :: OrgParser String
 orgInlineParamValue = try $
-  skipSpaces *> many1 (noneOf "\t\n\r ]") <* skipSpaces
+  skipSpaces
+    *> notFollowedBy (char ':')
+    *> many1 (noneOf "\t\n\r ]")
+    <* skipSpaces
 
 orgArgWordChar :: OrgParser Char
 orgArgWordChar = alphaNum <|> oneOf "-_"
@@ -647,12 +704,32 @@ parseFormat = try $ do
 header :: OrgParser (F Blocks)
 header = try $ do
   level <- headerStart
-  title <- inlinesTillNewline
-  return $ B.header level <$> title
+  title <- manyTill inline (lookAhead headerEnd)
+  tags <- headerEnd
+  let inlns = trimInlinesF . mconcat $ title <> map tagToInlineF tags
+  st <- getState
+  let inlines = runF inlns st
+  attr <- registerHeader nullAttr inlines
+  return $ pure (B.headerWith attr level inlines)
+ where
+   tagToInlineF :: String -> F Inlines
+   tagToInlineF t = return $ B.spanWith ("", ["tag"], [("data-tag-name", t)]) mempty
+
+headerEnd :: OrgParser [String]
+headerEnd = option [] headerTags <* newline
+
+headerTags :: OrgParser [String]
+headerTags = try $
+  skipSpaces
+  *> char ':'
+  *> many1 tag
+  <* skipSpaces
+ where tag = many1 (alphaNum <|> oneOf "@%#_")
+             <* char ':'
 
 headerStart :: OrgParser Int
 headerStart = try $
-  (length <$> many1 (char '*')) <* many1 (char ' ')
+  (length <$> many1 (char '*')) <* many1 (char ' ') <* updateLastPreCharPos
 
 
 -- Don't use (or need) the reader wrapper here, we want hline to be
@@ -844,9 +921,13 @@ noteBlock = try $ do
 paraOrPlain :: OrgParser (F Blocks)
 paraOrPlain = try $ do
   ils <- parseInlines
-  nl <- option False (newline >> return True)
-  try (guard nl >> notFollowedBy (orderedListStart <|> bulletListStart) >>
-           return (B.para <$> ils))
+  nl <- option False (newline *> return True)
+  -- Read block as paragraph, except if we are in a list context and the block
+  -- is directly followed by a list item, in which case the block is read as
+  -- plain text.
+  try (guard nl
+       *> notFollowedBy (inList *> (orderedListStart <|> bulletListStart))
+       *> return (B.para <$> ils))
     <|>  (return (B.plain <$> ils))
 
 inlinesTillNewline :: OrgParser (F Inlines)
@@ -911,19 +992,22 @@ definitionListItem :: OrgParser Int
                    -> OrgParser (F (Inlines, [Blocks]))
 definitionListItem parseMarkerGetLength = try $ do
   markerLength <- parseMarkerGetLength
-  term <- manyTill (noneOf "\n\r") (try $ string "::")
+  term <- manyTill (noneOf "\n\r") (try definitionMarker)
   line1 <- anyLineNewline
   blank <- option "" ("\n" <$ blankline)
   cont <- concat <$> many (listContinuation markerLength)
   term' <- parseFromString parseInlines term
   contents' <- parseFromString parseBlocks $ line1 ++ blank ++ cont
   return $ (,) <$> term' <*> fmap (:[]) contents'
+ where
+   definitionMarker =
+     spaceChar *> string "::" <* (spaceChar <|> lookAhead P.newline)
 
 
 -- parse raw text for one list item, excluding start marker and continuations
 listItem :: OrgParser Int
          -> OrgParser (F Blocks)
-listItem start = try $ do
+listItem start = try . withContext ListItemState $ do
   markerLength <- try start
   firstLine <- anyLineNewline
   blank <- option "" ("\n" <$ blankline)
@@ -1468,8 +1552,11 @@ smart :: OrgParser (F Inlines)
 smart = do
   getOption readerSmart >>= guard
   doubleQuoted <|> singleQuoted <|>
-    choice (map (return <$>) [orgApostrophe, dash, ellipses])
-  where orgApostrophe =
+    choice (map (return <$>) [orgApostrophe, orgDash, orgEllipses])
+  where
+    orgDash = dash <* updatePositions '-'
+    orgEllipses = ellipses <* updatePositions '.'
+    orgApostrophe =
           (char '\'' <|> char '\8217') <* updateLastPreCharPos
                                        <* updateLastForbiddenCharPos
                                        *> return (B.str "\x2019")
@@ -1477,9 +1564,10 @@ smart = do
 singleQuoted :: OrgParser (F Inlines)
 singleQuoted = try $ do
   singleQuoteStart
+  updatePositions '\''
   withQuoteContext InSingleQuote $
     fmap B.singleQuoted . trimInlinesF . mconcat <$>
-      many1Till inline singleQuoteEnd
+      many1Till inline (singleQuoteEnd <* updatePositions '\'')
 
 -- doubleQuoted will handle regular double-quoted sections, as well
 -- as dialogues with an open double-quote without a close double-quote
@@ -1487,6 +1575,7 @@ singleQuoted = try $ do
 doubleQuoted :: OrgParser (F Inlines)
 doubleQuoted = try $ do
   doubleQuoteStart
+  updatePositions '"'
   contents <- mconcat <$> many (try $ notFollowedBy doubleQuoteEnd >> inline)
   (withQuoteContext InDoubleQuote $ (doubleQuoteEnd <* updateLastForbiddenCharPos) >> return
        (fmap B.doubleQuoted . trimInlinesF $ contents))

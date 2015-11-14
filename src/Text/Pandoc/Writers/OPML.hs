@@ -68,8 +68,9 @@ showDateTimeRFC822 :: UTCTime -> String
 showDateTimeRFC822 = formatTime defaultTimeLocale "%a, %d %b %Y %X %Z"
 
 convertDate :: [Inline] -> String
-convertDate ils = maybe "" showDateTimeRFC822
-  $ parseTime defaultTimeLocale "%F" =<< (normalizeDate $ stringify ils)
+convertDate ils = maybe "" showDateTimeRFC822 $
+  parseTimeM True
+  defaultTimeLocale "%F" =<< (normalizeDate $ stringify ils)
 
 -- | Convert an Element to OPML.
 elementToOPML :: WriterOptions -> Element -> Doc

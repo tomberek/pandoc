@@ -81,6 +81,8 @@ module Text.Pandoc.Shared (
                      hush,
                      -- * Safe read
                      safeRead,
+                     -- * Version
+                     pandocVersion,
                      urlEncode
                     ) where
 
@@ -100,9 +102,7 @@ import Network.URI ( escapeURIString, isURI, nonStrictRelativeTo,
                      unEscapeString, parseURIReference, isAllowedInURI )
 import qualified Data.Set as Set
 import System.Directory
-import System.FilePath (joinPath, splitDirectories, pathSeparator, isPathSeparator)
 import Text.Pandoc.MIME (MimeType, getMimeType)
-import System.FilePath ( (</>), takeExtension, dropExtension)
 import Data.Generics (Typeable, Data)
 import qualified Control.Monad.State as S
 import qualified Control.Exception as E
@@ -112,16 +112,22 @@ import Data.Time
 import System.IO (stderr)
 import Text.HTML.TagSoup (renderTagsOptions, RenderOptions(..), Tag(..),
          renderOptions)
+import Text.Pandoc.Compat.Monoid ((<>))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as B8
-import Text.Pandoc.Compat.Monoid
 import Data.ByteString.Base64 (decodeLenient)
 import Data.Sequence (ViewR(..), ViewL(..), viewl, viewr)
 import qualified Data.Text as T (toUpper, pack, unpack)
-import Data.ByteString.Lazy (toChunks)
+import Data.ByteString.Lazy (toChunks, fromChunks)
+import qualified Data.ByteString.Lazy as BL
+import Paths_pandoc (version)
 
 import Text.Pandoc.Data (dataFiles)
 import Network.URI (parseURI)
+
+-- | Version number of pandoc library.
+pandocVersion :: String
+pandocVersion = "1.15.2"
 
 --
 -- List processing
@@ -238,9 +244,12 @@ toRomanNumeral x =
               _ | x >= 1    -> "I" ++ toRomanNumeral (x - 1)
               _             -> ""
 
--- | Escape whitespace in URI.
+-- | Escape whitespace and some punctuation characters in URI.
 escapeURI :: String -> String
-escapeURI = escapeURIString (not . isSpace)
+escapeURI = escapeURIString (not . needsEscaping)
+  where needsEscaping c = isSpace c || c `elem`
+                           ['<','>','|','"','{','}','[',']','^', '`']
+
 
 -- | Convert tabs to spaces and filter out DOS line endings.
 -- Tabs will be preserved if tab stop is set to 0.
@@ -270,7 +279,12 @@ tabFilter tabStop =
 normalizeDate :: String -> Maybe String
 normalizeDate s = fmap (formatTime defaultTimeLocale "%F")
   (msum $ map (\fs -> parsetimeWith fs s) formats :: Maybe Day)
-   where parsetimeWith = parseTime defaultTimeLocale
+   where parsetimeWith =
+#if MIN_VERSION_time(1,5,0)
+             parseTimeM True defaultTimeLocale
+#else
+             parseTime defaultTimeLocale
+#endif
          formats = ["%x","%m/%d/%Y", "%D","%F", "%d %b %Y",
                     "%d %B %Y", "%b. %d, %Y", "%B %d, %Y", "%Y"]
 
@@ -499,6 +513,7 @@ stringify = query go . walk deNote
         go (Str x) = x
         go (Code _ x) = x
         go (Math _ x) = x
+        go (RawInline (Format "html") ('<':'b':'r':_)) = " " -- see #2105
         go LineBreak = " "
         go _ = ""
         deNote (Note _) = Str ""
@@ -627,27 +642,32 @@ hierarchicalizeWithIds ((Header level attr@(_,classes,_) title'):xs) = do
   sectionContents' <- hierarchicalizeWithIds sectionContents
   rest' <- hierarchicalizeWithIds rest
   return $ Sec level newnum attr title' sectionContents' : rest'
+hierarchicalizeWithIds ((Div ("",["references"],[])
+                         (Header level (ident,classes,kvs) title' : xs)):ys) =
+  hierarchicalizeWithIds ((Header level (ident,("references":classes),kvs)
+                           title') : (xs ++ ys))
 hierarchicalizeWithIds (x:rest) = do
   rest' <- hierarchicalizeWithIds rest
   return $ (Blk x) : rest'
 
 headerLtEq :: Int -> Block -> Bool
 headerLtEq level (Header l _ _) = l <= level
+headerLtEq level (Div ("",["references"],[]) (Header l _ _ : _))  = l <= level
 headerLtEq _ _ = False
 
 -- | Generate a unique identifier from a list of inlines.
 -- Second argument is a list of already used identifiers.
 uniqueIdent :: [Inline] -> [String] -> String
-uniqueIdent title' usedIdents =
-  let baseIdent = case inlineListToIdentifier title' of
+uniqueIdent title' usedIdents
+  =  let baseIdent = case inlineListToIdentifier title' of
                         ""   -> "section"
                         x    -> x
-      numIdent n = baseIdent ++ "-" ++ show n
-  in  if baseIdent `elem` usedIdents
-        then case find (\x -> numIdent x `notElem` usedIdents) ([1..60000] :: [Int]) of
+         numIdent n = baseIdent ++ "-" ++ show n
+     in  if baseIdent `elem` usedIdents
+           then case find (\x -> numIdent x `notElem` usedIdents) ([1..60000] :: [Int]) of
                   Just x  -> numIdent x
                   Nothing -> baseIdent   -- if we have more than 60,000, allow repeats
-        else baseIdent
+           else baseIdent
 
 -- | True if block is a Header block.
 isHeaderBlock :: Block -> Bool

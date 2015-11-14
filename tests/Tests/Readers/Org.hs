@@ -7,7 +7,6 @@ import Tests.Helpers
 import Text.Pandoc.Builder
 import Text.Pandoc
 import Data.List (intersperse)
-import Data.Monoid (mempty, mappend, mconcat)
 import Text.Pandoc.Error
 
 org :: String -> Pandoc
@@ -265,6 +264,16 @@ tests =
                            )
                            "echo 'Hello, World'")
 
+      , "Inline code block with toggle" =:
+          "src_sh[:toggle]{echo $HOME}" =?>
+          (para $ codeWith ( ""
+                           , [ "bash", "rundoc-block" ]
+                           , [ ("rundoc-language", "sh")
+                             , ("rundoc-toggle", "yes")
+                             ]
+                           )
+                           "echo $HOME")
+
       , "Citation" =:
           "[@nonexistent]" =?>
           let citation = Citation
@@ -457,21 +466,25 @@ tests =
 
       , "First Level Header" =:
           "* Headline\n" =?>
-          header 1 "Headline"
+          headerWith ("headline", [], []) 1 "Headline"
 
       , "Third Level Header" =:
           "*** Third Level Headline\n" =?>
-          header 3 ("Third" <> space <>
-                    "Level" <> space <>
-                    "Headline")
+          headerWith ("third-level-headline", [], [])
+                     3
+                     ("Third" <> space <> "Level" <> space <> "Headline")
 
       , "Compact Headers with Paragraph" =:
           unlines [ "* First Level"
                   , "** Second Level"
                   , "   Text"
                   ] =?>
-          mconcat [ header 1 ("First" <> space <> "Level")
-                  , header 2 ("Second" <> space <> "Level")
+          mconcat [ headerWith ("first-level", [], [])
+                               1
+                               ("First" <> space <> "Level")
+                  , headerWith ("second-level", [], [])
+                               2
+                               ("Second" <> space <> "Level")
                   , para "Text"
                   ]
 
@@ -482,8 +495,12 @@ tests =
                   , ""
                   , "   Text"
                   ] =?>
-          mconcat [ header 1 ("First" <> space <> "Level")
-                  , header 2 ("Second" <> space <> "Level")
+          mconcat [ headerWith ("first-level", [], [])
+                               1
+                               ("First" <> space <> "Level")
+                  , headerWith ("second-level", [], [])
+                               2
+                               ("Second" <> space <> "Level")
                   , para "Text"
                   ]
 
@@ -492,9 +509,45 @@ tests =
                   , "Spaghetti and meatballs tonight."
                   , "** walk dog"
                   ] =?>
-          mconcat [ header 2 ("eat" <> space <> "dinner")
+          mconcat [ headerWith ("eat-dinner", [], [])
+                               2
+                               ("eat" <> space <> "dinner")
                   , para $ spcSep [ "Spaghetti", "and", "meatballs", "tonight." ]
-                  , header 2 ("walk" <> space <> "dog")
+                  , headerWith ("walk-dog", [], [])
+                               2
+                               ("walk" <> space <> "dog")
+                  ]
+
+      , "Tagged headers" =:
+          unlines [ "* Personal       :PERSONAL:"
+                  , "** Call Mom      :@PHONE:"
+                  , "** Call John     :@PHONE:JOHN: "
+                  ] =?>
+          let tagSpan t = spanWith ("", ["tag"], [("data-tag-name", t)]) mempty
+          in mconcat [ headerWith ("personal", [], [])
+                                  1
+                                  ("Personal" <> tagSpan "PERSONAL")
+                     , headerWith ("call-mom", [], [])
+                                  2
+                                  ("Call Mom" <> tagSpan "@PHONE")
+                     , headerWith ("call-john", [], [])
+                                  2
+                                  ("Call John" <> tagSpan "@PHONE" <> tagSpan "JOHN")
+                     ]
+
+      , "Untagged header containing colons" =:
+          "* This: is not: tagged" =?>
+          headerWith ("this-is-not-tagged", [], []) 1 "This: is not: tagged"
+
+      , "Header starting with strokeout text" =:
+          unlines [ "foo"
+                  , ""
+                  , "* +thing+ other thing"
+                  ] =?>
+          mconcat [ para "foo"
+                  , headerWith ("thing-other-thing", [], [])
+                               1
+                               ((strikeout "thing") <> " other thing")
                   ]
 
       , "Comment Trees" =:
@@ -503,10 +556,17 @@ tests =
                   , "** This will be dropped"
                   , "* Comment tree above"
                   ] =?>
-          header 1 "Comment tree above"
+          headerWith ("comment-tree-above", [], []) 1 "Comment tree above"
 
       , "Nothing but a COMMENT header" =:
           "* COMMENT Test" =?>
+          (mempty::Blocks)
+
+      , "Tree with :noexport:" =:
+          unlines [ "* Should be ignored :archive:noexport:old:"
+                  , "** Old stuff"
+                  , "   This is not going to be exported"
+                  ] =?>
           (mempty::Blocks)
 
       , "Paragraph starting with an asterisk" =:
@@ -618,7 +678,7 @@ tests =
                   [ "Another", space, "note"
                   , note $ para ("This" <> space <> "is" <> space <> "great!")
                   ])
-          , header 2 "Headline"
+          , headerWith ("headline", [], []) 2 "Headline"
           ]
       ]
 
@@ -642,7 +702,7 @@ tests =
            "* Item2\n") =?>
           bulletList [ plain "Item1"
                      ] <>
-          header 1 "Item2"
+          headerWith ("item2", [], []) 1 "Item2"
 
       , "Multi-line Bullet Lists" =:
           ("- *Fat\n" ++
@@ -702,7 +762,7 @@ tests =
           mconcat [ bulletList [ plain "Discovery"
                                , plain ("Human" <> space <> "After" <> space <> "All")
                                ]
-                  , header 1 "Homework"
+                  , headerWith ("homework", [], []) 1 "Homework"
                   ]
 
       , "Bullet List Unindented with trailing Header" =:
@@ -712,7 +772,7 @@ tests =
           mconcat [ bulletList [ plain "Discovery"
                                , plain "Homework"
                                ]
-                  , header 1 "NotValidListItem"
+                  , headerWith ("notvalidlistitem", [], []) 1 "NotValidListItem"
                   ]
 
       , "Simple Ordered List" =:
@@ -781,7 +841,7 @@ tests =
           unlines [ "- PLL :: phase-locked loop"
                   , "- TTL ::"
                   , "  transistor-transistor logic"
-                  , "- PSK::phase-shift keying"
+                  , "- PSK :: phase-shift keying"
                   , ""
                   , "  a digital modulation scheme"
                   ] =?>
@@ -817,8 +877,12 @@ tests =
           mconcat [ definitionList [ ("definition", [plain "list"])
                                    , ("cool", [plain "defs"])
                                    ]
-                  , header 1 "header"
+                  , headerWith ("header", [], []) 1 "header"
                   ]
+
+      , "Definition lists double-colon markers must be surrounded by whitespace" =:
+          "- std::cout" =?>
+          bulletList [ plain "std::cout" ]
 
       , "Loose bullet list" =:
           unlines [ "- apple"
@@ -831,6 +895,14 @@ tests =
                      , para "orange"
                      , para "peach"
                      ]
+
+      , "Recognize preceding paragraphs in non-list contexts" =:
+          unlines [ "CLOSED: [2015-10-19 Mon 15:03]"
+                  , "- Note taken on [2015-10-19 Mon 13:24]"
+                  ] =?>
+          mconcat [ para "CLOSED: [2015-10-19 Mon 15:03]"
+                  , bulletList [ plain "Note taken on [2015-10-19 Mon 13:24]" ]
+                  ]
       ]
 
   , testGroup "Tables"
@@ -1055,6 +1127,15 @@ tests =
                    , ": 65" ] =?>
            rawBlock "html" ""
 
+      , "Source block with toggling header arguments" =:
+        unlines [ "#+BEGIN_SRC sh :noeval"
+                , "echo $HOME"
+                , "#+END_SRC"
+                ] =?>
+        let classes = [ "bash", "rundoc-block" ]
+            params = [ ("rundoc-language", "sh"), ("rundoc-noeval", "yes") ]
+        in codeBlockWith ("", classes, params) "echo $HOME\n"
+
       , "Example block" =:
            unlines [ "#+begin_example"
                    , "A chosen representation of"
@@ -1102,6 +1183,15 @@ tests =
               , spcSep [ "Durchaus", "studiert,", "mit", "heißem", "Bemühn." ]
               ]
           ]
+
+      , "Verse block with newlines" =:
+          unlines [ "#+BEGIN_VERSE"
+                  , "foo"
+                  , ""
+                  , "bar"
+                  , "#+END_VERSE"
+                  ] =?>
+          para ("foo" <> linebreak <> linebreak <> "bar")
 
       , "LaTeX fragment" =:
           unlines [ "\\begin{equation}"
@@ -1160,25 +1250,34 @@ tests =
                         ]
           in codeBlockWith ( "", classes, params) "code body\n"
       ]
+
     , testGroup "Smart punctuation"
       [ test orgSmart "quote before ellipses"
         ("'...hi'"
          =?> para (singleQuoted "…hi"))
-        
+
       , test orgSmart "apostrophe before emph"
         ("D'oh! A l'/aide/!"
          =?> para ("D’oh! A l’" <> emph "aide" <> "!"))
-        
+
       , test orgSmart "apostrophe in French"
         ("À l'arrivée de la guerre, le thème de l'«impossibilité du socialisme»"
          =?> para "À l’arrivée de la guerre, le thème de l’«impossibilité du socialisme»")
-        
+
       , test orgSmart "Quotes cannot occur at the end of emphasized text"
         ("/say \"yes\"/" =?>
          para ("/say" <> space <> doubleQuoted "yes" <> "/"))
-        
+
       , test orgSmart "Dashes are allowed at the borders of emphasis'"
         ("/foo---/" =?>
          para (emph "foo—"))
+
+      , test orgSmart "Single quotes can be followed by emphasized text"
+        ("Singles on the '/meat market/'" =?>
+         para ("Singles on the " <> (singleQuoted $ emph "meat market")))
+
+      , test orgSmart "Double quotes can be followed by emphasized text"
+        ("Double income, no kids: \"/DINK/\"" =?>
+         para ("Double income, no kids: " <> (doubleQuoted $ emph "DINK")))
       ]
   ]

@@ -1,3 +1,4 @@
+.hy
 .TH "Pandoc Test Suite" "" "July 17, 2006" "" ""
 .PP
 This is a set of tests for pandoc.

@@ -1,51 +1,52 @@
 #!/bin/bash -e
 
+LOCALBIN=$HOME/.local/bin
 DIST=`pwd`/osx_package
-SANDBOX=`pwd`/.cabal-sandbox
 VERSION=$(grep -e '^Version' pandoc.cabal | awk '{print $2}')
 RESOURCES=$DIST/Resources
 ROOT=$DIST/pandoc
-MANDIR=`pwd`/man
 DEST=$ROOT/usr/local
 OSX=osx
 SCRIPTS=$OSX/osx-resources
 BASE=pandoc-$VERSION
 ME=$(whoami)
 PACKAGEMAKER=/Applications/PackageMaker.app/Contents/MacOS/PackageMaker
-CPPHS=$SANDBOX/bin/cpphs
+
+# We need this for hsb2hs:
+PATH=$LOCALBIN:$PATH
 
 # echo Removing old files...
 rm -rf $DIST
+mkdir -p $DIST
 mkdir -p $RESOURCES
-
-cabal sandbox init
-echo Updating database
-cabal update
+stack setup
+which hsb2hs | stack install --stack-yaml=stack.hsb2hs.yaml
 
 echo Building pandoc...
-cabal clean
-# Use cpphs to avoid problems with clang cpp on ghc 7.8 osx:
-cabal install cpphs hsb2hs
-cabal install --ghc-options="-optl-mmacosx-version-min=10.6" --reinstall --flags="embed_data_files make-pandoc-man-pages" --ghc-options "-pgmP$CPPHS -optP--cpp" . pandoc-citeproc
+stack clean
+stack install --stack-yaml=osx/stack.yaml
 
-make man
+echo Getting man pages...
+make man/pandoc.1
+
 # get pandoc-citeproc man page:
-PANDOC_CITEPROC_PATH=`cabal unpack -d $DIST pandoc-citeproc | awk '{print $3;}'`
-cp $PANDOC_CITEPROC_PATH/man/man1/pandoc-citeproc.1 $MANDIR/man1/
+PANDOC_CITEPROC_VERSION=`pandoc-citeproc --version | awk '{print $2;}'`
+PANDOC_CITEPROC_TARBALL=https://hackage.haskell.org/package/pandoc-citeproc-${PANDOC_CITEPROC_VERSION}/pandoc-citeproc-${PANDOC_CITEPROC_VERSION}.tar.gz
+curl ${PANDOC_CITEPROC_TARBALL} | tar xzC $DIST
+PANDOC_CITEPROC_PATH=$DIST/pandoc-citeproc-${PANDOC_CITEPROC_VERSION}
 
 mkdir -p $DEST/bin
 mkdir -p $DEST/share/man/man1
-mkdir -p $DEST/share/man/man5
 for f in pandoc pandoc-citeproc; do
-  cp $SANDBOX/bin/$f $DEST/bin/;
-  cp $MANDIR/man1/$f.1 $DEST/share/man/man1/
+  cp $LOCALBIN/$f $DEST/bin/;
 done
-cp $MANDIR/man5/pandoc_markdown.5 $DEST/share/man/man5/
+cp $PANDOC_CITEPROC_PATH/man/man1/pandoc-citeproc.1 $DEST/share/man/man1/
+cp man/pandoc.1 $DEST/share/man/man1/
 
 chown -R $ME:staff $DIST
 
 echo Copying license...
-$SANDBOX/bin/pandoc --data data -t html5 -s COPYING -o $RESOURCES/license.html
+$LOCALBIN/pandoc --data data -t html5 -s COPYING -o $RESOURCES/license.html
 
 echo Signing pandoc executable...
 

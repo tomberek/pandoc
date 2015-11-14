@@ -1,22 +1,24 @@
-{ mkDerivation, aeson, array, base, base64-bytestring, binary, blaze-html
-, blaze-markup, bytestring, containers, css-text, data-default
-, deepseq-generics, extensible-exceptions, happy, mtl, network-uri, old-locale
-, old-time, pandoc-types, parsec, random, scientific, SHA, syb, tagsoup, text
-, time, unordered-containers, vector, xml, yaml
+{ mkDerivation, aeson, array, base, base64-bytestring, binary
+, blaze-html, blaze-markup, bytestring, containers, data-default
+, deepseq-generics, directory, extensible-exceptions, filepath, mtl
+, network-uri, old-time, pandoc-types, parsec, process, random
+, scientific, SHA, stdenv, syb, tagsoup, text, time
+, unordered-containers, vector, xml, yaml
 }:
-
 mkDerivation {
   pname = "my-pandoc";
-  version = "1.13.2";
-  src = builtins.filterSource (path: type: baseNameOf path != ".git") ./.;
-  buildDepends = [
+  version = "1.15.2";
+  src = ./.;
+  libraryHaskellDepends = [
     aeson array base base64-bytestring binary blaze-html blaze-markup
-    bytestring containers css-text data-default deepseq-generics
-    extensible-exceptions happy mtl network-uri old-locale old-time
-    pandoc-types parsec random scientific SHA syb tagsoup text time
-    unordered-containers vector xml yaml
+    bytestring containers data-default deepseq-generics directory
+    extensible-exceptions filepath mtl network-uri old-time
+    pandoc-types parsec process random scientific SHA syb tagsoup text
+    time unordered-containers vector xml yaml
   ];
-  homepage = "http://johnmacfarlane.net/pandoc";
+  doHaddock = false;
+  doCheck = false;
+  homepage = "http://pandoc.org";
   description = "Conversion between markup formats";
   license = "GPL";
 }

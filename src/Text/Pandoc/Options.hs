@@ -31,6 +31,7 @@ options.
 -}
 module Text.Pandoc.Options ( Extension(..)
                            , pandocExtensions
+                           , plainExtensions
                            , strictExtensions
                            , phpMarkdownExtraExtensions
                            , githubMarkdownExtensions
@@ -50,7 +51,6 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Default
 import Text.Pandoc.MediaBag (MediaBag)
-import Data.Monoid
 import Data.Data (Data)
 import Data.Typeable (Typeable)
 
@@ -104,6 +104,7 @@ data Extension =
     | Ext_ignore_line_breaks  -- ^ Newlines in paragraphs are ignored
     | Ext_literate_haskell    -- ^ Enable literate Haskell conventions
     | Ext_abbreviations       -- ^ PHP markdown extra abbreviation definitions
+    | Ext_emoji               -- ^ Support emoji like :smile:
     | Ext_auto_identifiers    -- ^ Automatic identifiers for headers
     | Ext_ascii_identifiers   -- ^ ascii-only identifiers for headers
     | Ext_header_attributes   -- ^ Explicit header attributes {#id .class k=v}
@@ -157,6 +158,24 @@ pandocExtensions = Set.fromList
   , Ext_shortcut_reference_links
   ]
 
+plainExtensions :: Set Extension
+plainExtensions = Set.fromList
+  [ Ext_table_captions
+  , Ext_implicit_figures
+  , Ext_simple_tables
+  , Ext_multiline_tables
+  , Ext_grid_tables
+  , Ext_latex_macros
+  , Ext_fancy_lists
+  , Ext_startnum
+  , Ext_definition_lists
+  , Ext_example_lists
+  , Ext_intraword_underscores
+  , Ext_blank_before_blockquote
+  , Ext_blank_before_header
+  , Ext_strikeout
+  ]
+
 phpMarkdownExtraExtensions :: Set Extension
 phpMarkdownExtraExtensions = Set.fromList
   [ Ext_footnotes
@@ -184,6 +203,7 @@ githubMarkdownExtensions = Set.fromList
   , Ext_intraword_underscores
   , Ext_strikeout
   , Ext_hard_line_breaks
+  , Ext_emoji
   , Ext_lists_without_preceding_blankline
   , Ext_shortcut_reference_links
   ]
@@ -204,6 +224,15 @@ multimarkdownExtensions = Set.fromList
   , Ext_implicit_header_references
   , Ext_auto_identifiers
   , Ext_mmd_header_identifiers
+  , Ext_implicit_figures
+  -- Note: MMD's syntax for superscripts and subscripts
+  -- is a bit more permissive than pandoc's, allowing
+  -- e^2 and a~1 instead of e^2^ and a~1~, so even with
+  -- these options we don't have full support for MMD
+  -- superscripts and subscripts, but there's no reason
+  -- not to include these:
+  , Ext_superscript
+  , Ext_subscript
   ]
 
 strictExtensions :: Set Extension

@@ -39,6 +39,7 @@ import Data.Ord ( comparing )
 import Data.Char ( isSpace, isAlphaNum, toLower )
 import Data.Maybe
 import Text.Pandoc.Definition
+import Text.Pandoc.Emoji (emojis)
 import qualified Data.Text as T
 import Data.Text (Text)
 import qualified Data.Yaml as Yaml
@@ -47,7 +48,7 @@ import qualified Data.HashMap.Strict as H
 import qualified Text.Pandoc.Builder as B
 import qualified Text.Pandoc.UTF8 as UTF8
 import qualified Data.Vector as V
-import Text.Pandoc.Builder (Inlines, Blocks, trimInlines, (<>))
+import Text.Pandoc.Builder (Inlines, Blocks, trimInlines)
 import Text.Pandoc.Options
 import Text.Pandoc.Shared
 import Text.Pandoc.XML (fromEntities)
@@ -55,8 +56,6 @@ import Text.Pandoc.Parsing hiding (tableWith)
 import Text.Pandoc.Readers.LaTeX ( rawLaTeXBlock )
 import Text.Pandoc.Readers.HTML ( htmlTag, htmlInBalanced, isInlineTag, isBlockTag,
                                   isTextTag, isCommentTag )
-import Data.Monoid (mconcat, mempty)
-import Control.Applicative ((<$>), (<*), (*>), (<$), (<*>))
 import Control.Monad
 import System.FilePath (takeExtension, addExtension)
 import Text.HTML.TagSoup
@@ -64,6 +63,7 @@ import Text.HTML.TagSoup.Match (tagOpen)
 import qualified Data.Set as Set
 import Text.Printf (printf)
 import Debug.Trace (trace)
+import Text.Pandoc.Compat.Monoid ((<>))
 import Text.Pandoc.Error
 
 type MarkdownParser = Parser [Char] ParserState
@@ -328,23 +328,22 @@ stopLine = try $ (string "---" <|> string "...") >> blankline >> return ()
 mmdTitleBlock :: MarkdownParser ()
 mmdTitleBlock = try $ do
   guardEnabled Ext_mmd_title_block
-  kvPairs <- many1 kvPair
+  firstPair <- kvPair False
+  restPairs <- many (kvPair True)
+  let kvPairs = firstPair : restPairs
   blanklines
   updateState $ \st -> st{ stateMeta' = stateMeta' st <>
                              return (Meta $ M.fromList kvPairs) }
 
-kvPair :: MarkdownParser (String, MetaValue)
-kvPair = try $ do
+kvPair :: Bool -> MarkdownParser (String, MetaValue)
+kvPair allowEmpty = try $ do
   key <- many1Till (alphaNum <|> oneOf "_- ") (char ':')
-  skipMany1 spaceNoNewline
-  val <- manyTill anyChar
+  val <- trim <$> manyTill anyChar
           (try $ newline >> lookAhead (blankline <|> nonspaceChar))
-  guard $ not . null . trim $ val
+  guard $ allowEmpty || not (null val)
   let key' = concat $ words $ map toLower key
-  let val' = MetaBlocks $ B.toList $ B.plain $ B.text $ trim val
+  let val' = MetaBlocks $ B.toList $ B.plain $ B.text $ val
   return (key',val')
-  where
-    spaceNoNewline = satisfy (\x -> isSpace x && (x/='\n') && (x/='\r'))
 
 parseMarkdown :: MarkdownParser Pandoc
 parseMarkdown = do
@@ -502,9 +501,15 @@ block = do
 header :: MarkdownParser (F Blocks)
 header = setextHeader <|> atxHeader <?> "header"
 
+atxChar :: MarkdownParser Char
+atxChar = do
+  exts <- getOption readerExtensions
+  return $ if Set.member Ext_literate_haskell exts
+    then '=' else '#'
+
 atxHeader :: MarkdownParser (F Blocks)
 atxHeader = try $ do
-  level <- many1 (char '#') >>= return . length
+  level <- atxChar >>= many1 . char >>= return . length
   notFollowedBy $ guardEnabled Ext_fancy_lists >>
                   (char '.' <|> char ')') -- this would be a list
   skipSpaces
@@ -520,7 +525,7 @@ atxClosing :: MarkdownParser Attr
 atxClosing = try $ do
   attr' <- option nullAttr
              (guardEnabled Ext_mmd_header_identifiers >> mmdHeaderIdentifier)
-  skipMany (char '#')
+  skipMany . char =<< atxChar
   skipSpaces
   attr <- option attr'
              (guardEnabled Ext_header_attributes >> attributes)
@@ -546,6 +551,7 @@ setextHeader = try $ do
   -- This lookahead prevents us from wasting time parsing Inlines
   -- unless necessary -- it gives a significant performance boost.
   lookAhead $ anyLine >> many1 (oneOf setextHChars) >> blankline
+  skipSpaces
   (text, raw) <- withRaw $
        trimInlinesF . mconcat <$> many1 (notFollowedBy setextHeaderEnd >> inline)
   attr <- setextHeaderEnd
@@ -631,7 +637,11 @@ keyValAttr = try $ do
   val <- enclosed (char '"') (char '"') litChar
      <|> enclosed (char '\'') (char '\'') litChar
      <|> many (escapedChar' <|> noneOf " \t\n\r}")
-  return $ \(id',cs,kvs) -> (id',cs,kvs ++ [(key,val)])
+  return $ \(id',cs,kvs) ->
+    case key of
+         "id"    -> (val,cs,kvs)
+         "class" -> (id',cs ++ words val,kvs)
+         _       -> (id',cs,kvs ++ [(key,val)])
 
 specialAttr :: MarkdownParser (Attr -> Attr)
 specialAttr = do
@@ -1311,7 +1321,7 @@ removeOneLeadingSpace xs =
 gridTableFooter :: MarkdownParser [Char]
 gridTableFooter = blanklines
 
-pipeBreak :: MarkdownParser [Alignment]
+pipeBreak :: MarkdownParser ([Alignment], [Int])
 pipeBreak = try $ do
   nonindentSpaces
   openPipe <- (True <$ char '|') <|> return False
@@ -1321,14 +1331,22 @@ pipeBreak = try $ do
   guard $ not (null rest && not openPipe)
   optional (char '|')
   blankline
-  return (first:rest)
+  return $ unzip (first:rest)
 
 pipeTable :: MarkdownParser ([Alignment], [Double], F [Blocks], F [[Blocks]])
 pipeTable = try $ do
-  (heads,aligns) <- (,) <$> pipeTableRow <*> pipeBreak
-  lines' <-  sequence <$> many pipeTableRow
-  let widths = replicate (length aligns) 0.0
-  return $ (aligns, widths, heads, lines')
+  nonindentSpaces
+  lookAhead nonspaceChar
+  (heads,(aligns, seplengths)) <- (,) <$> pipeTableRow <*> pipeBreak
+  (lines', rawRows) <- unzip <$> many (withRaw pipeTableRow)
+  let maxlength = maximum $ map length rawRows
+  numColumns <- getOption readerColumns
+  let widths = if maxlength > numColumns
+                  then map (\len ->
+                           fromIntegral (len + 1) / fromIntegral numColumns)
+                             seplengths
+                  else replicate (length aligns) 0.0
+  return $ (aligns, widths, heads, sequence lines')
 
 sepPipe :: MarkdownParser ()
 sepPipe = try $ do
@@ -1338,7 +1356,7 @@ sepPipe = try $ do
 -- parse a row, also returning probable alignments for org-table cells
 pipeTableRow :: MarkdownParser (F [Blocks])
 pipeTableRow = do
-  nonindentSpaces
+  skipMany spaceChar
   openPipe <- (True <$ char '|') <|> return False
   let cell = mconcat <$>
                  many (notFollowedBy (blankline <|> char '|') >> inline)
@@ -1357,19 +1375,20 @@ pipeTableRow = do
                  ils' | B.isNull ils' -> mempty
                       | otherwise   -> B.plain $ ils') cells'
 
-pipeTableHeaderPart :: Parser [Char] st Alignment
+pipeTableHeaderPart :: Parser [Char] st (Alignment, Int)
 pipeTableHeaderPart = try $ do
   skipMany spaceChar
   left <- optionMaybe (char ':')
-  many1 (char '-')
+  pipe <- many1 (char '-')
   right <- optionMaybe (char ':')
   skipMany spaceChar
+  let len = length pipe + maybe 0 (const 1) left + maybe 0 (const 1) right
   return $
-    case (left,right) of
-      (Nothing,Nothing) -> AlignDefault
-      (Just _,Nothing)  -> AlignLeft
-      (Nothing,Just _)  -> AlignRight
-      (Just _,Just _)   -> AlignCenter
+    ((case (left,right) of
+       (Nothing,Nothing) -> AlignDefault
+       (Just _,Nothing)  -> AlignLeft
+       (Nothing,Just _)  -> AlignRight
+       (Just _,Just _)   -> AlignCenter), len)
 
 -- Succeed only if current line contains a pipe.
 scanForPipe :: Parser [Char] st ()
@@ -1446,6 +1465,7 @@ inline = choice [ whitespace
                 , exampleRef
                 , smart
                 , return . B.singleton <$> charRef
+                , emoji
                 , symbol
                 , ltSign
                 ] <?> "inline"
@@ -1639,7 +1659,7 @@ endline = try $ do
   notFollowedBy (inList >> listStart)
   guardDisabled Ext_lists_without_preceding_blankline <|> notFollowedBy listStart
   guardEnabled Ext_blank_before_blockquote <|> notFollowedBy emailBlockQuoteStart
-  guardEnabled Ext_blank_before_header <|> notFollowedBy (char '#') -- atx header
+  guardEnabled Ext_blank_before_header <|> (notFollowedBy . char =<< atxChar) -- atx header
   guardDisabled Ext_backtick_code_blocks <|>
      notFollowedBy (() <$ (lookAhead (char '`') >> codeBlockFenced))
   notFollowedByHtmlCloser
@@ -1743,12 +1763,14 @@ dropBrackets = reverse . dropRB . reverse . dropLB
 bareURL :: MarkdownParser (F Inlines)
 bareURL = try $ do
   guardEnabled Ext_autolink_bare_uris
+  getState >>= guard . stateAllowLinks
   (orig, src) <- uri <|> emailAddress
   notFollowedBy $ try $ spaces >> htmlTag (~== TagClose "a")
   return $ return $ B.link src "" (B.str orig)
 
 autoLink :: MarkdownParser (F Inlines)
 autoLink = try $ do
+  getState >>= guard . stateAllowLinks
   char '<'
   (orig, src) <- uri <|> emailAddress
   -- in rare cases, something may remain after the uri parser
@@ -1860,6 +1882,21 @@ rawHtmlInline = do
                                          not (isCloseBlockTag x))
                              else not . isTextTag
   return $ return $ B.rawInline "html" result
+
+-- Emoji
+
+emojiChars :: [Char]
+emojiChars = ['a'..'z'] ++ ['0'..'9'] ++ ['_','+','-']
+
+emoji :: MarkdownParser (F Inlines)
+emoji = try $ do
+  guardEnabled Ext_emoji
+  char ':'
+  emojikey <- many1 (oneOf emojiChars)
+  char ':'
+  case M.lookup emojikey emojis of
+       Just s  -> return (return (B.str s))
+       Nothing -> mzero
 
 -- Citations
 

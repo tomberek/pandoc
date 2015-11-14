@@ -34,6 +34,7 @@ import Data.ByteString.Lazy (ByteString)
 import qualified Data.ByteString.Lazy as B
 import qualified Data.ByteString.Lazy.Char8 as BC
 import qualified Data.ByteString as BS
+import Text.Pandoc.Compat.Monoid ((<>))
 import System.Exit (ExitCode (..))
 import System.FilePath
 import System.IO (stderr, stdout)
@@ -42,13 +43,12 @@ import Data.Digest.Pure.SHA (showDigest, sha1)
 import System.Environment
 import Control.Monad (unless, when, (<=<))
 import qualified Control.Exception as E
-import Control.Applicative ((<$))
 import Data.List (isInfixOf)
 import Data.Maybe (fromMaybe)
 import qualified Text.Pandoc.UTF8 as UTF8
 import Text.Pandoc.Definition
 import Text.Pandoc.Walk (walkM)
-import Text.Pandoc.Shared (fetchItem', warn, withTempDir)
+import Text.Pandoc.Shared (fetchItem', warn, withTempDir, inDirectory)
 import Text.Pandoc.Options (WriterOptions(..))
 import Text.Pandoc.MIME (extensionFromMimeType, getMimeType)
 import Text.Pandoc.Process (pipeProcess)
@@ -72,7 +72,9 @@ makePDF program writer opts doc = withTempDir "tex2pdf." $ \tmpdir -> do
   doc' <- handleImages opts tmpdir doc
   let source = writer opts doc'
       args   = writerLaTeXArgs opts
-  tex2pdf' (writerVerbose opts) args tmpdir program source
+  case program of
+     "context" -> context2pdf (writerVerbose opts) tmpdir source
+     _ -> tex2pdf' (writerVerbose opts) args tmpdir program source
 
 handleImages :: WriterOptions
              -> FilePath      -- ^ temp dir to store images
@@ -156,9 +158,6 @@ tex2pdf' verbose args tmpDir program source = do
        (ExitSuccess, Nothing)  -> return $ Left ""
        (ExitSuccess, Just pdf) -> return $ Right pdf
 
-(<>) :: ByteString -> ByteString -> ByteString
-(<>) = B.append
-
 -- parsing output
 
 extractMsg :: ByteString -> ByteString
@@ -169,6 +168,14 @@ extractMsg log' = do
   if null msg'
      then log'
      else BC.unlines (msg'' ++ lineno)
+
+extractConTeXtMsg :: ByteString -> ByteString
+extractConTeXtMsg log' = do
+  let msg'  = take 1 $
+              dropWhile (not . ("tex error" `BC.isPrefixOf`)) $ BC.lines log'
+  if null msg'
+     then log'
+     else BC.unlines msg'
 
 -- running tex programs
 
@@ -190,7 +197,7 @@ runTeXProgram verbose program args runNumber numRuns tmpDir source = do
     let file' = file
 #endif
     let programArgs = ["-halt-on-error", "-interaction", "nonstopmode",
-         "-output-directory", tmpDir', file'] ++ args
+         "-output-directory", tmpDir'] ++ args ++ [file']
     env' <- getEnvironment
     let sep = searchPathSeparator:[]
     let texinputs = maybe (tmpDir' ++ sep) ((tmpDir' ++ sep) ++)
@@ -198,6 +205,8 @@ runTeXProgram verbose program args runNumber numRuns tmpDir source = do
     let env'' = ("TEXINPUTS", texinputs) :
                   [(k,v) | (k,v) <- env', k /= "TEXINPUTS"]
     when (verbose && runNumber == 1) $ do
+      putStrLn $ "[makePDF] temp dir:"
+      putStrLn tmpDir'
       putStrLn $ "[makePDF] Command line:"
       putStrLn $ program ++ " " ++ unwords (map show programArgs)
       putStr "\n"
@@ -226,3 +235,55 @@ runTeXProgram verbose program args runNumber numRuns tmpDir source = do
                    else return Nothing
          return (exit, out <> err, pdf)
 
+context2pdf :: Bool         -- ^ Verbose output
+            -> FilePath     -- ^ temp directory for output
+            -> String       -- ^ ConTeXt source
+            -> IO (Either ByteString ByteString)
+context2pdf verbose tmpDir source = inDirectory tmpDir $ do
+  let file = "input.tex"
+  UTF8.writeFile file source
+#ifdef _WINDOWS
+  -- note:  we want / even on Windows, for TexLive
+  let tmpDir' = changePathSeparators tmpDir
+#else
+  let tmpDir' = tmpDir
+#endif
+  let programArgs = ["--batchmode"] ++ [file]
+  env' <- getEnvironment
+  let sep = searchPathSeparator:[]
+  let texinputs = maybe (".." ++ sep) ((".." ++ sep) ++)
+        $ lookup "TEXINPUTS" env'
+  let env'' = ("TEXINPUTS", texinputs) :
+                [(k,v) | (k,v) <- env', k /= "TEXINPUTS"]
+  when verbose $ do
+    putStrLn $ "[makePDF] temp dir:"
+    putStrLn tmpDir'
+    putStrLn $ "[makePDF] Command line:"
+    putStrLn $ "context" ++ " " ++ unwords (map show programArgs)
+    putStr "\n"
+    putStrLn $ "[makePDF] Environment:"
+    mapM_ print env''
+    putStr "\n"
+    putStrLn $ "[makePDF] Contents of " ++ file ++ ":"
+    B.readFile file >>= B.putStr
+    putStr "\n"
+  (exit, out, err) <- pipeProcess (Just env'') "context" programArgs BL.empty
+  when verbose $ do
+    B.hPutStr stdout out
+    B.hPutStr stderr err
+    putStr "\n"
+  let pdfFile = replaceExtension file ".pdf"
+  pdfExists <- doesFileExist pdfFile
+  mbPdf <- if pdfExists
+            -- We read PDF as a strict bytestring to make sure that the
+            -- temp directory is removed on Windows.
+            -- See https://github.com/jgm/pandoc/issues/1192.
+            then (Just . B.fromChunks . (:[])) `fmap` BS.readFile pdfFile
+            else return Nothing
+  let log' = out <> err
+  case (exit, mbPdf) of
+       (ExitFailure _, _)      -> do
+          let logmsg = extractConTeXtMsg log'
+          return $ Left logmsg
+       (ExitSuccess, Nothing)  -> return $ Left ""
+       (ExitSuccess, Just pdf) -> return $ Right pdf

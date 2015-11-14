@@ -16,8 +16,8 @@ module Text.Pandoc.Readers.Haddock
 
 import Text.Pandoc.Builder (Blocks, Inlines)
 import qualified Text.Pandoc.Builder as B
+import Text.Pandoc.Compat.Monoid ((<>))
 import Text.Pandoc.Shared (trim, splitBy)
-import Data.Monoid
 import Data.List (intersperse, stripPrefix)
 import Data.Maybe (fromMaybe)
 import Text.Pandoc.Definition

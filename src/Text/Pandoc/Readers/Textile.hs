@@ -64,9 +64,8 @@ import Text.HTML.TagSoup.Match
 import Data.List ( intercalate )
 import Data.Char ( digitToInt, isUpper)
 import Control.Monad ( guard, liftM, when )
+import Text.Pandoc.Compat.Monoid ((<>))
 import Text.Printf
-import Control.Applicative ((<$>), (*>), (<*), (<$))
-import Data.Monoid
 import Debug.Trace (trace)
 import Text.Pandoc.Error
 
@@ -81,11 +80,12 @@ readTextile opts s =
 -- | Generate a Pandoc ADT from a textile document
 parseTextile :: Parser [Char] ParserState Pandoc
 parseTextile = do
-  -- textile allows raw HTML and does smart punctuation by default
+  -- textile allows raw HTML and does smart punctuation by default,
+  -- but we do not enable smart punctuation unless it is explicitly
+  -- asked for, for better conversion to other light markup formats
   oldOpts <- stateOptions `fmap` getState
   updateState $ \state -> state{ stateOptions =
-                                   oldOpts{ readerSmart = True
-                                          , readerParseRaw = True
+                                   oldOpts{ readerParseRaw = True
                                           , readerOldDashes = True
                                           } }
   many blankline
@@ -599,8 +599,8 @@ langAttr = do
 
 -- | Parses material surrounded by a parser.
 surrounded :: Parser [Char] st t   -- ^ surrounding parser
-	    -> Parser [Char] st a    -- ^ content parser (to be used repeatedly)
-	    -> Parser [Char] st [a]
+            -> Parser [Char] st a    -- ^ content parser (to be used repeatedly)
+            -> Parser [Char] st [a]
 surrounded border =
   enclosed (border *> notFollowedBy (oneOf " \t\n\r")) (try border)
 

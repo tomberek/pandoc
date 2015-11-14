@@ -16,6 +16,7 @@ import Text.Pandoc.Options ( ReaderOptions(..), readerTrace)
 import Text.Pandoc.Shared (escapeURI, collapseFilePath, addMetaField)
 import Text.Pandoc.MediaBag (MediaBag, insertMedia)
 import Text.Pandoc.Compat.Except (MonadError, throwError, runExcept, Except)
+import Text.Pandoc.Compat.Monoid ((<>))
 import Text.Pandoc.MIME (MimeType)
 import qualified Text.Pandoc.Builder as B
 import Codec.Archive.Zip ( Archive (..), toArchive, fromEntry
@@ -25,9 +26,7 @@ import System.FilePath ( takeFileName, (</>), dropFileName, normalise
                        , dropFileName
                        , splitFileName )
 import qualified Text.Pandoc.UTF8 as UTF8 (toStringLazy)
-import Control.Applicative ((<$>))
 import Control.Monad (guard, liftM, when)
-import Data.Monoid (mempty, (<>))
 import Data.List (isPrefixOf, isInfixOf)
 import Data.Maybe (mapMaybe, fromMaybe)
 import qualified Data.Map as M (Map, lookup, fromList, elems)
@@ -181,7 +180,6 @@ getManifest archive = do
 fixInternalReferences :: FilePath -> Pandoc -> Pandoc
 fixInternalReferences pathToFile =
   (walk $ renameImages root)
-  . (walk normalisePath)
   . (walk $ fixBlockIRs filename)
   . (walk $ fixInlineIRs filename)
   where
@@ -195,12 +193,6 @@ fixInlineIRs s (Code as code) =
 fixInlineIRs s (Link t ('#':url, tit)) =
   Link t (addHash s url, tit)
 fixInlineIRs _ v = v
-
-normalisePath :: Inline -> Inline
-normalisePath (Link t (url, tit)) =
-  let (path, uid) = span (/= '#') url in
-  Link t (takeFileName path ++ uid, tit)
-normalisePath s = s
 
 prependHash :: [String] -> Inline -> Inline
 prependHash ps l@(Link is (url, tit))
@@ -223,7 +215,7 @@ fixAttrs s (ident, cs, kvs) = (addHash s ident, filter (not . null) cs, removeEP
 
 addHash :: String -> String -> String
 addHash _ "" = ""
-addHash s ident = s ++ "#" ++ ident
+addHash s ident = takeFileName s ++ "#" ++ ident
 
 removeEPUBAttrs :: [(String, String)] -> [(String, String)]
 removeEPUBAttrs kvs = filter (not . isEPUBAttr) kvs

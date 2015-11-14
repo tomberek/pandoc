@@ -37,9 +37,9 @@ import Text.TeXMath
 import qualified Data.ByteString.Lazy as B
 import Text.Pandoc.UTF8 ( fromStringLazy )
 import Codec.Archive.Zip
-import Control.Applicative ((<$>))
 import Text.Pandoc.Options ( WriterOptions(..) )
-import Text.Pandoc.Shared ( stringify, readDataFile, fetchItem', warn )
+import Text.Pandoc.Shared ( stringify, fetchItem', warn,
+                            getDefaultReferenceODT )
 import Text.Pandoc.ImageSize ( imageSize, sizeInPoints )
 import Text.Pandoc.MIME ( getMimeType, extensionFromMimeType )
 import Text.Pandoc.Definition
@@ -60,11 +60,10 @@ writeODT :: WriterOptions  -- ^ Writer options
 writeODT opts doc@(Pandoc meta _) = do
   let datadir = writerUserDataDir opts
   let title = docTitle meta
-  refArchive <- liftM toArchive $
+  refArchive <-
        case writerReferenceODT opts of
-             Just f -> B.readFile f
-             Nothing -> (B.fromChunks . (:[])) `fmap`
-                           readDataFile datadir "reference.odt"
+             Just f -> liftM toArchive $ B.readFile f
+             Nothing -> getDefaultReferenceODT datadir
   -- handle formulas and pictures
   picEntriesRef <- newIORef ([] :: [Entry])
   doc' <- walkM (transformPicMath opts picEntriesRef) $ walk fixDisplayMath doc

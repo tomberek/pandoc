@@ -38,15 +38,14 @@ module Text.Pandoc.Readers.MediaWiki ( readMediaWiki ) where
 
 import Text.Pandoc.Definition
 import qualified Text.Pandoc.Builder as B
-import Text.Pandoc.Builder (Inlines, Blocks, trimInlines, (<>))
+import Text.Pandoc.Builder (Inlines, Blocks, trimInlines)
+import Text.Pandoc.Compat.Monoid ((<>))
 import Text.Pandoc.Options
 import Text.Pandoc.Readers.HTML ( htmlTag, isBlockTag, isCommentTag )
 import Text.Pandoc.XML ( fromEntities )
 import Text.Pandoc.Parsing hiding ( nested )
 import Text.Pandoc.Walk ( walk )
 import Text.Pandoc.Shared ( stripTrailingNewlines, safeRead, stringify, trim )
-import Data.Monoid (mconcat, mempty)
-import Control.Applicative ((<$>), (<*), (*>), (<$))
 import Control.Monad
 import Data.List (intersperse, intercalate, isPrefixOf )
 import Text.HTML.TagSoup
@@ -252,8 +251,8 @@ parseAttr = try $ do
   skipMany spaceChar
   k <- many1 letter
   char '='
-  char '"'
-  v <- many1Till (satisfy (/='\n')) (char '"')
+  v <- (char '"' >> many1Till (satisfy (/='\n')) (char '"'))
+       <|> many1 nonspaceChar
   return (k,v)
 
 tableStart :: MWParser ()

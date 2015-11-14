@@ -85,14 +85,12 @@ import Text.Pandoc.Readers.Docx.Reducible
 import Text.Pandoc.Shared
 import Text.Pandoc.MediaBag (insertMedia, MediaBag)
 import Data.List (delete, (\\), intersect)
-import Data.Monoid
 import Text.TeXMath (writeTeX)
 import Data.Default (Default)
 import qualified Data.ByteString.Lazy as B
 import qualified Data.Map as M
 import Control.Monad.Reader
 import Control.Monad.State
-import Control.Applicative ((<$>))
 import Data.Sequence (ViewL(..), viewl)
 import qualified Data.Sequence as Seq (null)
 
@@ -206,11 +204,15 @@ runElemToInlines :: RunElem -> Inlines
 runElemToInlines (TextRun s) = text s
 runElemToInlines (LnBrk) = linebreak
 runElemToInlines (Tab) = space
+runElemToInlines (SoftHyphen) = text "\xad"
+runElemToInlines (NoBreakHyphen) = text "\x2011"
 
 runElemToString :: RunElem -> String
 runElemToString (TextRun s) = s
 runElemToString (LnBrk) = ['\n']
 runElemToString (Tab) = ['\t']
+runElemToString (SoftHyphen) = ['\xad']
+runElemToString (NoBreakHyphen) = ['\x2011']
 
 runToString :: Run -> String
 runToString (Run _ runElems) = concatMap runElemToString runElems

@@ -81,7 +81,7 @@ module Text.Pandoc
                , readTxt2Tags
                , readTxt2TagsNoMacros
                -- * Writers: converting /from/ Pandoc format
-               , Writer (..)
+              , Writer (..)
                , writeNative
                , writeJSON
                , writeMarkdown
@@ -104,12 +104,11 @@ module Text.Pandoc
                , writeAsciiDoc
                -- * Rendering templates and default templates
                , module Text.Pandoc.Templates
-               -- * Version
-               , pandocVersion
                -- * Miscellaneous
                , getReader
                , getWriter
                , ToJsonFilter(..)
+               , pandocVersion
              ) where
 
 import Text.Pandoc.Definition
@@ -146,7 +145,7 @@ import Text.Pandoc.Writers.Org
 import Text.Pandoc.Writers.AsciiDoc
 import Text.Pandoc.Templates
 import Text.Pandoc.Options
-import Text.Pandoc.Shared (safeRead, warn, mapLeft)
+import Text.Pandoc.Shared (safeRead, warn, mapLeft, pandocVersion)
 import Text.Pandoc.MediaBag (MediaBag)
 import Text.Pandoc.Error
 import Data.Aeson
@@ -157,10 +156,6 @@ import qualified Data.Set as Set
 import Text.Parsec
 import Text.Parsec.Error
 import qualified Text.Pandoc.UTF8 as UTF8
-
--- | Version number of pandoc library.
-pandocVersion :: String
-pandocVersion = "pandoc 1.13.2"
 
 parseFormatSpec :: String
                 -> Either ParseError (String, Set Extension -> Set Extension)
@@ -276,8 +271,9 @@ getDefaultExtensions "markdown_phpextra" = phpMarkdownExtraExtensions
 getDefaultExtensions "markdown_mmd" = multimarkdownExtensions
 getDefaultExtensions "markdown_github" = githubMarkdownExtensions
 getDefaultExtensions "markdown"        = pandocExtensions
-getDefaultExtensions "plain"           = pandocExtensions
-getDefaultExtensions "org"             = Set.fromList [Ext_citations]
+getDefaultExtensions "plain"           = plainExtensions
+getDefaultExtensions "org"             = Set.fromList [Ext_citations,
+                                                       Ext_auto_identifiers]
 getDefaultExtensions "textile"         = Set.fromList [Ext_auto_identifiers]
 getDefaultExtensions "html"            = Set.fromList [Ext_auto_identifiers,
                                                        Ext_native_divs,
