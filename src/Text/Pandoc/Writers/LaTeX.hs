@@ -487,7 +487,7 @@ blockToLaTeX (BulletList lst) = do
   let inc = if incremental then "[<+->]" else ""
   items <- mapM listItemToLaTeX lst
   let spacing = if isTightList lst
-                   then text "\\tightlist"
+                   then text "\\itemsep1pt\\parskip0pt\\parsep0pt"
                    else empty
   return $ text ("\\begin{itemize}" ++ inc) $$ spacing $$ vcat items $$
              "\\end{itemize}"
@@ -522,7 +522,7 @@ blockToLaTeX (OrderedList (start, numstyle, numdelim) lst) = do
                         else "\\setcounter" <> braces enum <>
                               braces (text $ show $ start - 1)
   let spacing = if isTightList lst
-                   then text "\\tightlist"
+                   then text "\\itemsep1pt\\parskip0pt\\parsep0pt"
                    else empty
   return $ text ("\\begin{enumerate}" ++ inc)
          $$ stylecommand
@@ -536,7 +536,7 @@ blockToLaTeX (DefinitionList lst) = do
   let inc = if incremental then "[<+->]" else ""
   items <- mapM defListItemToLaTeX lst
   let spacing = if all isTightList (map snd lst)
-                   then text "\\tightlist"
+                   then text "\\itemsep1pt\\parskip0pt\\parsep0pt"
                    else empty
   return $ text ("\\begin{description}" ++ inc) $$ spacing $$ vcat items $$
                "\\end{description}"
