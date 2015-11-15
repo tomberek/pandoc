@@ -889,12 +889,11 @@ inlineToLaTeX (Link txt (src, _)) =
              do modify $ \s -> s{ stUrl = True }
                 src' <- stringToLaTeX URLString (escapeURI src)
                 contents <- inlineListToLaTeX txt
-                return $ "\\href" <> braces (text src') <>
-                   braces ("\\nolinkurl" <> braces contents)
+                return $ ("\\nolinkurl" <> braces contents) <>
+                         text ("\\footnote{\\url{" ++ src' ++ "}}")
         _ -> do contents <- inlineListToLaTeX txt
                 src' <- stringToLaTeX URLString (escapeURI src)
-                return $ text ("\\href{" ++ src' ++ "}{") <>
-                         contents <> char '}'
+                return $ contents <> text ("\\footnote{\\url{" ++ src' ++ "}}")
 inlineToLaTeX (Image _ (source, _)) = do
   modify $ \s -> s{ stGraphics = True }
   let source' = if isURI source
