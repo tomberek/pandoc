@@ -1,6 +1,6 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving, CPP #-}
 {-
-Copyright (C) 2010-2015 John MacFarlane <jgm@berkeley.edu>
+Copyright (C) 2010-2016 John MacFarlane <jgm@berkeley.edu>
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -19,7 +19,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111(-1)307  USA
 
 {- |
    Module      : Text.Pandoc.Pretty
-   Copyright   : Copyright (C) 2010-2015 John MacFarlane
+   Copyright   : Copyright (C) 2010-2016 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -159,7 +159,7 @@ infixr 5 $$
                    else x <> cr <> y
 
 infixr 5 $+$
--- | @a $$ b@ puts @a@ above @b@, with a blank line between.
+-- | @a $+$ b@ puts @a@ above @b@, with a blank line between.
 ($+$) :: Doc -> Doc -> Doc
 ($+$) x y = if isEmpty x
                then y
@@ -196,8 +196,7 @@ chomp d = Doc (fromList dl')
         go (Prefixed s d' : xs) = Prefixed s (chomp d') : xs
         go xs = xs
 
-outp :: (IsString a, Monoid a)
-     => Int -> String -> DocState a
+outp :: (IsString a) => Int -> String -> DocState a
 outp off s | off < 0 = do  -- offset < 0 means newline characters
   st' <- get
   let rawpref = prefix st'
@@ -222,8 +221,7 @@ outp off s = do           -- offset >= 0 (0 might be combining char)
 -- | Renders a 'Doc'.  @render (Just n)@ will use
 -- a line length of @n@ to reflow text on breakable spaces.
 -- @render Nothing@ will not reflow text.
-render :: (Monoid a, IsString a)
-       => Maybe Int -> Doc -> a
+render :: (IsString a) => Maybe Int -> Doc -> a
 render linelen doc = fromString . mconcat . reverse . output $
   execState (renderDoc doc) startingState
    where startingState = RenderState{

@@ -4,4 +4,8 @@ module Text.Pandoc.Data (dataFiles) where
 import qualified Data.ByteString as B
 
 dataFiles :: [(FilePath, B.ByteString)]
-dataFiles = %blobs "data"
+dataFiles = map (\(fp, contents) ->
+  (Posix.joinPath (splitDirectories fp), contents)) dataFiles'
+
+dataFiles' :: [(FilePath, B.ByteString)]
+dataFiles' = ("MANUAL.txt", %blob "MANUAL.txt") : %blobs "data"

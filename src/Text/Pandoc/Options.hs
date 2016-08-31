@@ -1,6 +1,6 @@
 {-# LANGUAGE DeriveDataTypeable, DeriveGeneric #-}
 {-
-Copyright (C) 2012-2015 John MacFarlane <jgm@berkeley.edu>
+Copyright (C) 2012-2016 John MacFarlane <jgm@berkeley.edu>
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -19,7 +19,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
 {- |
    Module      : Text.Pandoc.Options
-   Copyright   : Copyright (C) 2012-2015 John MacFarlane
+   Copyright   : Copyright (C) 2012-2016 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -42,6 +42,7 @@ module Text.Pandoc.Options ( Extension(..)
                            , ObfuscationMethod (..)
                            , HTMLSlideVariant (..)
                            , EPUBVersion (..)
+                           , WrapOption (..)
                            , WriterOptions (..)
                            , TrackChanges (..)
                            , def
@@ -85,7 +86,8 @@ data Extension =
     | Ext_markdown_attribute      -- ^ Interpret text inside HTML as markdown
                                   --   iff container has attribute 'markdown'
     | Ext_escaped_line_breaks     -- ^ Treat a backslash at EOL as linebreak
-    | Ext_link_attributes     -- ^ MMD style reference link attributes
+    | Ext_link_attributes         -- ^ link and image attributes
+    | Ext_mmd_link_attributes     -- ^ MMD style reference link attributes
     | Ext_autolink_bare_uris  -- ^ Make all absolute URIs into links
     | Ext_fancy_lists         -- ^ Enable fancy list numbers and delimiters
     | Ext_lists_without_preceding_blankline -- ^ Allow lists without preceding blank
@@ -103,6 +105,8 @@ data Extension =
     | Ext_subscript           -- ^ Subscript using ~this~ syntax
     | Ext_hard_line_breaks    -- ^ All newlines become hard line breaks
     | Ext_ignore_line_breaks  -- ^ Newlines in paragraphs are ignored
+    | Ext_east_asian_line_breaks  -- ^ Newlines in paragraphs are ignored between
+                              -- East Asian wide characters
     | Ext_literate_haskell    -- ^ Enable literate Haskell conventions
     | Ext_abbreviations       -- ^ PHP markdown extra abbreviation definitions
     | Ext_emoji               -- ^ Support emoji like :smile:
@@ -154,6 +158,7 @@ pandocExtensions = Set.fromList
   , Ext_subscript
   , Ext_auto_identifiers
   , Ext_header_attributes
+  , Ext_link_attributes
   , Ext_implicit_header_references
   , Ext_line_blocks
   , Ext_shortcut_reference_links
@@ -187,6 +192,7 @@ phpMarkdownExtraExtensions = Set.fromList
   , Ext_definition_lists
   , Ext_intraword_underscores
   , Ext_header_attributes
+  , Ext_link_attributes
   , Ext_abbreviations
   , Ext_shortcut_reference_links
   ]
@@ -195,7 +201,6 @@ githubMarkdownExtensions :: Set Extension
 githubMarkdownExtensions = Set.fromList
   [ Ext_pipe_tables
   , Ext_raw_html
-  , Ext_tex_math_single_backslash
   , Ext_fenced_code_blocks
   , Ext_auto_identifiers
   , Ext_ascii_identifiers
@@ -214,7 +219,7 @@ multimarkdownExtensions = Set.fromList
   [ Ext_pipe_tables
   , Ext_raw_html
   , Ext_markdown_attribute
-  , Ext_link_attributes
+  , Ext_mmd_link_attributes
   , Ext_raw_tex
   , Ext_tex_math_double_backslash
   , Ext_intraword_underscores
@@ -258,6 +263,7 @@ data ReaderOptions = ReaderOptions{
        , readerDefaultImageExtension :: String -- ^ Default extension for images
        , readerTrace           :: Bool -- ^ Print debugging info
        , readerTrackChanges    :: TrackChanges
+       , readerFileScope      :: Bool -- ^ Parse before combining
 } deriving (Show, Read, Data, Typeable, Generic)
 
 instance Default ReaderOptions
@@ -274,6 +280,7 @@ instance Default ReaderOptions
                , readerDefaultImageExtension = ""
                , readerTrace                 = False
                , readerTrackChanges          = AcceptChanges
+               , readerFileScope             = False
                }
 
 --
@@ -318,6 +325,12 @@ data TrackChanges = AcceptChanges
                   | AllChanges
                   deriving (Show, Read, Eq, Data, Typeable, Generic)
 
+-- | Options for wrapping text in the output.
+data WrapOption = WrapAuto        -- ^ Automatically wrap to width
+                | WrapNone        -- ^ No non-semantic newlines
+                | WrapPreserve    -- ^ Preserve wrapping of input source
+                deriving (Show, Read, Eq, Data, Typeable, Generic)
+
 -- | Options for writers
 data WriterOptions = WriterOptions
   { writerStandalone       :: Bool   -- ^ Include header and footer
@@ -334,7 +347,8 @@ data WriterOptions = WriterOptions
   , writerSectionDivs      :: Bool   -- ^ Put sections in div tags in HTML
   , writerExtensions       :: Set Extension -- ^ Markdown extensions that can be used
   , writerReferenceLinks   :: Bool   -- ^ Use reference links in writing markdown, rst
-  , writerWrapText         :: Bool   -- ^ Wrap text to line length
+  , writerDpi              :: Int    -- ^ Dpi for pixel to/from inch/cm conversions
+  , writerWrapText         :: WrapOption  -- ^ Option for wrapping text
   , writerColumns          :: Int    -- ^ Characters in a line (for text wrapping)
   , writerEmailObfuscation :: ObfuscationMethod -- ^ How to obfuscate emails
   , writerIdentifierPrefix :: String -- ^ Prefix for section & note ids in HTML
@@ -342,6 +356,7 @@ data WriterOptions = WriterOptions
   , writerSourceURL        :: Maybe String  -- ^ Absolute URL + directory of 1st source file
   , writerUserDataDir      :: Maybe FilePath -- ^ Path of user data directory
   , writerCiteMethod       :: CiteMethod -- ^ How to print cites
+  , writerDocbook5         :: Bool       -- ^ Produce DocBook5
   , writerHtml5            :: Bool       -- ^ Produce HTML5
   , writerHtmlQTags        :: Bool       -- ^ Use @<q>@ tags for quotes in HTML
   , writerBeamer           :: Bool       -- ^ Produce beamer LaTeX slide show
@@ -378,13 +393,15 @@ instance Default WriterOptions where
                       , writerSectionDivs      = False
                       , writerExtensions       = pandocExtensions
                       , writerReferenceLinks   = False
-                      , writerWrapText         = True
+                      , writerDpi              = 96
+                      , writerWrapText         = WrapAuto
                       , writerColumns          = 72
-                      , writerEmailObfuscation = JavascriptObfuscation
+                      , writerEmailObfuscation = NoObfuscation
                       , writerIdentifierPrefix = ""
                       , writerSourceURL        = Nothing
                       , writerUserDataDir      = Nothing
                       , writerCiteMethod       = Citeproc
+                      , writerDocbook5         = False
                       , writerHtml5            = False
                       , writerHtmlQTags        = False
                       , writerBeamer           = False

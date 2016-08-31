@@ -1,5 +1,5 @@
 .\"t
-.TH PANDOC 1 "November 12, 2015" "pandoc 1.15.2"
+.TH PANDOC 1 "June 4, 2016" "pandoc 1.17.2"
 .SH NAME
 pandoc - general markup converter
 .SH SYNOPSIS
@@ -10,18 +10,18 @@ pandoc - general markup converter
 Pandoc is a Haskell library for converting from one markup format to
 another, and a command\-line tool that uses this library.
 It can read Markdown, CommonMark, PHP Markdown Extra, GitHub\-Flavored
-Markdown, and (subsets of) Textile, reStructuredText, HTML, LaTeX,
-MediaWiki markup, TWiki markup, Haddock markup, OPML, Emacs Org mode,
-DocBook, txt2tags, EPUB, ODT and Word docx; and it can write plain text,
-Markdown, CommonMark, PHP Markdown Extra, GitHub\-Flavored Markdown,
-reStructuredText, XHTML, HTML5, LaTeX (including \f[C]beamer\f[] slide
-shows), ConTeXt, RTF, OPML, DocBook, OpenDocument, ODT, Word docx, GNU
-Texinfo, MediaWiki markup, DokuWiki markup, Haddock markup, EPUB (v2 or
-v3), FictionBook2, Textile, groff man pages, Emacs Org mode, AsciiDoc,
-InDesign ICML, and Slidy, Slideous, DZSlides, reveal.js or S5 HTML slide
-shows.
-It can also produce PDF output on systems where LaTeX or ConTeXt is
-installed.
+Markdown, MultiMarkdown, and (subsets of) Textile, reStructuredText,
+HTML, LaTeX, MediaWiki markup, TWiki markup, Haddock markup, OPML, Emacs
+Org mode, DocBook, txt2tags, EPUB, ODT and Word docx; and it can write
+plain text, Markdown, CommonMark, PHP Markdown Extra, GitHub\-Flavored
+Markdown, MultiMarkdown, reStructuredText, XHTML, HTML5, LaTeX
+(including \f[C]beamer\f[] slide shows), ConTeXt, RTF, OPML, DocBook,
+OpenDocument, ODT, Word docx, GNU Texinfo, MediaWiki markup, DokuWiki
+markup, ZimWiki markup, Haddock markup, EPUB (v2 or v3), FictionBook2,
+Textile, groff man pages, Emacs Org mode, AsciiDoc, InDesign ICML, TEI
+Simple, and Slidy, Slideous, DZSlides, reveal.js or S5 HTML slide shows.
+It can also produce PDF output on systems where LaTeX, ConTeXt, or
+\f[C]wkhtmltopdf\f[] is installed.
 .PP
 Pandoc\[aq]s enhanced version of Markdown includes syntax for footnotes,
 tables, flexible ordered lists, definition lists, fenced code blocks,
@@ -174,40 +174,34 @@ Production of a PDF requires that a LaTeX engine be installed (see
 packages are available: \f[C]amsfonts\f[], \f[C]amsmath\f[],
 \f[C]lm\f[], \f[C]ifxetex\f[], \f[C]ifluatex\f[], \f[C]eurosym\f[],
 \f[C]listings\f[] (if the \f[C]\-\-listings\f[] option is used),
-\f[C]fancyvrb\f[], \f[C]longtable\f[], \f[C]booktabs\f[], \f[C]url\f[],
+\f[C]fancyvrb\f[], \f[C]longtable\f[], \f[C]booktabs\f[],
 \f[C]graphicx\f[] and \f[C]grffile\f[] (if the document contains
-images), \f[C]color\f[], \f[C]hyperref\f[], \f[C]ulem\f[],
-\f[C]geometry\f[] (with the \f[C]geometry\f[] variable set),
-\f[C]setspace\f[] (with \f[C]linestretch\f[]), and \f[C]babel\f[] (with
-\f[C]lang\f[]).
+images), \f[C]hyperref\f[], \f[C]ulem\f[], \f[C]geometry\f[] (with the
+\f[C]geometry\f[] variable set), \f[C]setspace\f[] (with
+\f[C]linestretch\f[]), and \f[C]babel\f[] (with \f[C]lang\f[]).
 The use of \f[C]xelatex\f[] or \f[C]lualatex\f[] as the LaTeX engine
 requires \f[C]fontspec\f[]; \f[C]xelatex\f[] uses \f[C]mathspec\f[],
 \f[C]polyglossia\f[] (with \f[C]lang\f[]), \f[C]xecjk\f[], and
 \f[C]bidi\f[] (with the \f[C]dir\f[] variable set).
 The \f[C]upquote\f[] and \f[C]microtype\f[] packages are used if
 available, and \f[C]csquotes\f[] will be used for smart punctuation if
-added to the template.
+added to the template or included in any header file.
 The \f[C]natbib\f[], \f[C]biblatex\f[], \f[C]bibtex\f[], and
 \f[C]biber\f[] packages can optionally be used for citation rendering.
 These are included with all recent versions of TeX Live.
 .PP
-Alternatively, pandoc can use ConTeXt to create a PDF.
+Alternatively, pandoc can use ConTeXt or \f[C]wkhtmltopdf\f[] to create
+a PDF.
 To do this, specify an output file with a \f[C]\&.pdf\f[] extension, as
-before, but add \f[C]\-t\ context\f[] to the command line.
+before, but add \f[C]\-t\ context\f[] or \f[C]\-t\ html5\f[] to the
+command line.
 .PP
-PDF output can be controlled using variables for LaTeX or variables for
-ConTeXt.
-.SS \f[C]hsmarkdown\f[]
-.PP
-A user who wants a drop\-in replacement for \f[C]Markdown.pl\f[] may
-create a symbolic link to the \f[C]pandoc\f[] executable called
-\f[C]hsmarkdown\f[].
-When invoked under the name \f[C]hsmarkdown\f[], \f[C]pandoc\f[] will
-behave as if invoked with
-\f[C]\-f\ markdown_strict\ \-\-email\-obfuscation=references\f[], and
-all command\-line options will be treated as regular arguments.
-This approach does not work under Cygwin, due to problems with its
-simulation of symbolic links.
+PDF output can be controlled using variables for LaTeX (if LaTeX is
+used) and variables for ConTeXt (if ConTeXt is used).
+If \f[C]wkhtmltopdf\f[] is used, then the variables
+\f[C]margin\-left\f[], \f[C]margin\-right\f[], \f[C]margin\-top\f[],
+\f[C]margin\-bottom\f[], and \f[C]papersize\f[] will affect the output,
+as will \f[C]\-\-css\f[].
 .SH OPTIONS
 .SS General options
 .TP
@@ -218,12 +212,13 @@ Specify input format.
 Markdown), \f[C]markdown_strict\f[] (original unextended Markdown),
 \f[C]markdown_phpextra\f[] (PHP Markdown Extra),
 \f[C]markdown_github\f[] (GitHub\-Flavored Markdown),
-\f[C]commonmark\f[] (CommonMark Markdown), \f[C]textile\f[] (Textile),
-\f[C]rst\f[] (reStructuredText), \f[C]html\f[] (HTML), \f[C]docbook\f[]
-(DocBook), \f[C]t2t\f[] (txt2tags), \f[C]docx\f[] (docx), \f[C]odt\f[]
-(ODT), \f[C]epub\f[] (EPUB), \f[C]opml\f[] (OPML), \f[C]org\f[] (Emacs
-Org mode), \f[C]mediawiki\f[] (MediaWiki markup), \f[C]twiki\f[] (TWiki
-markup), \f[C]haddock\f[] (Haddock markup), or \f[C]latex\f[] (LaTeX).
+\f[C]markdown_mmd\f[] (MultiMarkdown), \f[C]commonmark\f[] (CommonMark
+Markdown), \f[C]textile\f[] (Textile), \f[C]rst\f[] (reStructuredText),
+\f[C]html\f[] (HTML), \f[C]docbook\f[] (DocBook), \f[C]t2t\f[]
+(txt2tags), \f[C]docx\f[] (docx), \f[C]odt\f[] (ODT), \f[C]epub\f[]
+(EPUB), \f[C]opml\f[] (OPML), \f[C]org\f[] (Emacs Org mode),
+\f[C]mediawiki\f[] (MediaWiki markup), \f[C]twiki\f[] (TWiki markup),
+\f[C]haddock\f[] (Haddock markup), or \f[C]latex\f[] (LaTeX).
 If \f[C]+lhs\f[] is appended to \f[C]markdown\f[], \f[C]rst\f[],
 \f[C]latex\f[], or \f[C]html\f[], the input will be treated as literate
 Haskell source: see Literate Haskell support, below.
@@ -247,23 +242,25 @@ Specify output format.
 \f[C]markdown_strict\f[] (original unextended Markdown),
 \f[C]markdown_phpextra\f[] (PHP Markdown Extra),
 \f[C]markdown_github\f[] (GitHub\-Flavored Markdown),
-\f[C]commonmark\f[] (CommonMark Markdown), \f[C]rst\f[]
-(reStructuredText), \f[C]html\f[] (XHTML), \f[C]html5\f[] (HTML5),
-\f[C]latex\f[] (LaTeX), \f[C]beamer\f[] (LaTeX beamer slide show),
-\f[C]context\f[] (ConTeXt), \f[C]man\f[] (groff man), \f[C]mediawiki\f[]
-(MediaWiki markup), \f[C]dokuwiki\f[] (DokuWiki markup),
-\f[C]textile\f[] (Textile), \f[C]org\f[] (Emacs Org mode),
-\f[C]texinfo\f[] (GNU Texinfo), \f[C]opml\f[] (OPML), \f[C]docbook\f[]
-(DocBook), \f[C]opendocument\f[] (OpenDocument), \f[C]odt\f[]
+\f[C]markdown_mmd\f[] (MultiMarkdown), \f[C]commonmark\f[] (CommonMark
+Markdown), \f[C]rst\f[] (reStructuredText), \f[C]html\f[] (XHTML),
+\f[C]html5\f[] (HTML5), \f[C]latex\f[] (LaTeX), \f[C]beamer\f[] (LaTeX
+beamer slide show), \f[C]context\f[] (ConTeXt), \f[C]man\f[] (groff
+man), \f[C]mediawiki\f[] (MediaWiki markup), \f[C]dokuwiki\f[] (DokuWiki
+markup), \f[C]zimwiki\f[] (ZimWiki markup), \f[C]textile\f[] (Textile),
+\f[C]org\f[] (Emacs Org mode), \f[C]texinfo\f[] (GNU Texinfo),
+\f[C]opml\f[] (OPML), \f[C]docbook\f[] (DocBook 4), \f[C]docbook5\f[]
+(DocBook 5), \f[C]opendocument\f[] (OpenDocument), \f[C]odt\f[]
 (OpenOffice text document), \f[C]docx\f[] (Word docx), \f[C]haddock\f[]
 (Haddock markup), \f[C]rtf\f[] (rich text format), \f[C]epub\f[] (EPUB
 v2 book), \f[C]epub3\f[] (EPUB v3), \f[C]fb2\f[] (FictionBook2 e\-book),
 \f[C]asciidoc\f[] (AsciiDoc), \f[C]icml\f[] (InDesign ICML),
-\f[C]slidy\f[] (Slidy HTML and javascript slide show), \f[C]slideous\f[]
-(Slideous HTML and javascript slide show), \f[C]dzslides\f[] (DZSlides
-HTML5 + javascript slide show), \f[C]revealjs\f[] (reveal.js HTML5 +
-javascript slide show), \f[C]s5\f[] (S5 HTML and javascript slide show),
-or the path of a custom lua writer (see Custom writers, below).
+\f[C]tei\f[] (TEI Simple), \f[C]slidy\f[] (Slidy HTML and javascript
+slide show), \f[C]slideous\f[] (Slideous HTML and javascript slide
+show), \f[C]dzslides\f[] (DZSlides HTML5 + javascript slide show),
+\f[C]revealjs\f[] (reveal.js HTML5 + javascript slide show), \f[C]s5\f[]
+(S5 HTML and javascript slide show), or the path of a custom lua writer
+(see Custom writers, below).
 Note that \f[C]odt\f[], \f[C]epub\f[], and \f[C]epub3\f[] output will
 not be directed to \f[I]stdout\f[]; an output filename must be specified
 using the \f[C]\-o/\-\-output\f[] option.
@@ -356,9 +353,10 @@ Show usage message.
 Parse untranslatable HTML codes and LaTeX environments as raw HTML or
 LaTeX, instead of ignoring them.
 Affects only HTML and LaTeX input.
-Raw HTML can be printed in Markdown, reStructuredText, HTML, Slidy,
-Slideous, DZSlides, reveal.js, and S5 output; raw LaTeX can be printed
-in Markdown, reStructuredText, LaTeX, and ConTeXt output.
+Raw HTML can be printed in Markdown, reStructuredText, Emacs Org mode,
+HTML, Slidy, Slideous, DZSlides, reveal.js, and S5 output; raw LaTeX can
+be printed in Markdown, reStructuredText, Emacs Org mode, LaTeX, and
+ConTeXt output.
 The default is for the readers to omit untranslatable HTML codes and
 LaTeX environments.
 (The LaTeX reader does pass through untranslatable LaTeX
@@ -373,7 +371,8 @@ en\-dashes, and \f[C]\&...\f[] to ellipses.
 Nonbreaking spaces are inserted after certain abbreviations, such as
 "Mr." (Note: This option is selected automatically when the output
 format is \f[C]latex\f[] or \f[C]context\f[], unless
-\f[C]\-\-no\-tex\-ligatures\f[] is used.)
+\f[C]\-\-no\-tex\-ligatures\f[] is used.
+It has no effect for \f[C]latex\f[] input.)
 .RS
 .RE
 .TP
@@ -403,6 +402,15 @@ extension.
 This allows you to use the same source for formats that require
 different kinds of images.
 Currently this option only affects the Markdown and LaTeX readers.
+.RS
+.RE
+.TP
+.B \f[C]\-\-file\-scope\f[]
+Parse each file individually before combining for multifile documents.
+This will allow footnotes in different files with the same identifiers
+to work as expected.
+If this option is set, footnotes and links will not work across files.
+Reading binary files (docx, odt, epub) implies \f[C]\-\-file\-scope\f[].
 .RS
 .RE
 .TP
@@ -481,13 +489,16 @@ Specify the number of spaces per tab (default is 4).
 .RE
 .TP
 .B \f[C]\-\-track\-changes=accept\f[]|\f[C]reject\f[]|\f[C]all\f[]
-Specifies what to do with insertions and deletions produced by the MS
-Word "Track Changes" feature.
+Specifies what to do with insertions, deletions, and comments produced
+by the MS Word "Track Changes" feature.
 \f[C]accept\f[] (the default), inserts all insertions, and ignores all
 deletions.
 \f[C]reject\f[] inserts all deletions and ignores insertions.
-\f[C]all\f[] puts in both insertions and deletions, wrapped in spans
-with \f[C]insertion\f[] and \f[C]deletion\f[] classes, respectively.
+Both \f[C]accept\f[] and \f[C]reject\f[] ignore comments.
+\f[C]all\f[] puts in insertions, deletions, and comments, wrapped in
+spans with \f[C]insertion\f[], \f[C]deletion\f[],
+\f[C]comment\-start\f[], and \f[C]comment\-end\f[] classes,
+respectively.
 The author and time of change is included.
 \f[C]all\f[] is useful for scripting: only accepting changes from a
 certain reviewer, say, or before a certain date.
@@ -506,7 +517,7 @@ This option only affects the docx and epub readers.
 .TP
 .B \f[C]\-s\f[], \f[C]\-\-standalone\f[]
 Produce output with an appropriate header and footer (e.g.
-a standalone HTML, LaTeX, or RTF file, not a fragment).
+a standalone HTML, LaTeX, TEI, or RTF file, not a fragment).
 This option is set automatically for \f[C]pdf\f[], \f[C]epub\f[],
 \f[C]epub3\f[], \f[C]fb2\f[], \f[C]docx\f[], and \f[C]odt\f[] output.
 .RS
@@ -552,23 +563,47 @@ Files in the user data directory are ignored.
 .RS
 .RE
 .TP
+.B \f[C]\-\-dpi\f[]=\f[I]NUMBER\f[]
+Specify the dpi (dots per inch) value for conversion from pixels to
+inch/centimeters and vice versa.
+The default is 96dpi.
+Technically, the correct term would be ppi (pixels per inch).
+.RS
+.RE
+.TP
+.B \f[C]\-\-wrap=[auto|none|preserve]\f[]
+Determine how text is wrapped in the output (the source code, not the
+rendered version).
+With \f[C]auto\f[] (the default), pandoc will attempt to wrap lines to
+the column width specified by \f[C]\-\-columns\f[] (default 80).
+With \f[C]none\f[], pandoc will not wrap lines at all.
+With \f[C]preserve\f[], pandoc will attempt to preserve the wrapping
+from the source document (that is, where there are nonsemantic newlines
+in the source, there will be nonsemantic newlines in the output as
+well).
+.RS
+.RE
+.TP
 .B \f[C]\-\-no\-wrap\f[]
-Disable text wrapping in output.
-By default, text is wrapped appropriately for the output format.
+Deprecated synonym for \f[C]\-\-wrap=none\f[].
 .RS
 .RE
 .TP
 .B \f[C]\-\-columns=\f[]\f[I]NUMBER\f[]
-Specify length of lines in characters (for text wrapping).
+Specify length of lines in characters.
+This affects text wrapping in the generated source code (see
+\f[C]\-\-wrap\f[]).
+It also affects calculation of column widths for plain text tables (see
+Tables below).
 .RS
 .RE
 .TP
 .B \f[C]\-\-toc\f[], \f[C]\-\-table\-of\-contents\f[]
 Include an automatically generated table of contents (or, in the case of
-\f[C]latex\f[], \f[C]context\f[], and \f[C]rst\f[], an instruction to
-create one) in the output document.
+\f[C]latex\f[], \f[C]context\f[], \f[C]docx\f[], and \f[C]rst\f[], an
+instruction to create one) in the output document.
 This option has no effect on \f[C]man\f[], \f[C]docbook\f[],
-\f[C]slidy\f[], \f[C]slideous\f[], \f[C]s5\f[], \f[C]docx\f[], or
+\f[C]docbook5\f[], \f[C]slidy\f[], \f[C]slideous\f[], \f[C]s5\f[], or
 \f[C]odt\f[] output.
 .RS
 .RE
@@ -625,7 +660,7 @@ Implies \f[C]\-\-standalone\f[].
 Include contents of \f[I]FILE\f[], verbatim, at the end of the document
 body (before the \f[C]</body>\f[] tag in HTML, or the
 \f[C]\\end{document}\f[] command in LaTeX).
-This option can be be used repeatedly to include multiple files.
+This option can be used repeatedly to include multiple files.
 They will be included in the order specified.
 Implies \f[C]\-\-standalone\f[].
 .RS
@@ -647,19 +682,11 @@ Scripts, images, and stylesheets at absolute URLs will be downloaded;
 those at relative URLs will be sought relative to the working directory
 (if the first source file is local) or relative to the base URL (if the
 first source file is remote).
-\f[C]\-\-self\-contained\f[] does not work with \f[C]\-\-mathjax\f[].
-.RS
-.RE
-.TP
-.B \f[C]\-\-offline\f[]
-Deprecated synonym for \f[C]\-\-self\-contained\f[].
-.RS
-.RE
-.TP
-.B \f[C]\-5\f[], \f[C]\-\-html5\f[]
-Produce HTML5 instead of HTML4.
-This option has no effect for writers other than \f[C]html\f[].
-(\f[I]Deprecated:\f[] Use the \f[C]html5\f[] output format instead.)
+Limitation: resources that are loaded dynamically through JavaScript
+cannot be incorporated; as a result, \f[C]\-\-self\-contained\f[] does
+not work with \f[C]\-\-mathjax\f[], and some advanced features (e.g.
+zoom or speaker notes) may not work in an offline "self\-contained"
+\f[C]reveal.js\f[] slide show.
 .RS
 .RE
 .TP
@@ -693,7 +720,8 @@ ATX headers.
 Treat top\-level headers as chapters in LaTeX, ConTeXt, and DocBook
 output.
 When the LaTeX document class is set to \f[C]report\f[], \f[C]book\f[],
-or \f[C]memoir\f[], this option is implied.
+or \f[C]memoir\f[] (unless the \f[C]article\f[] option is specified),
+this option is implied.
 If \f[C]beamer\f[] is the output format, top\-level headers will become
 \f[C]\\part{..}\f[].
 .RS
@@ -722,11 +750,15 @@ Implies \f[C]\-\-number\-sections\f[].
 .RE
 .TP
 .B \f[C]\-\-no\-tex\-ligatures\f[]
-Do not convert quotation marks, apostrophes, and dashes to the TeX
-ligatures when writing LaTeX or ConTeXt.
-Instead, just use literal unicode characters.
-This is needed for using advanced OpenType features with
-\f[C]xelatex\f[] and \f[C]lualatex\f[].
+Do not use the TeX ligatures for quotation marks, apostrophes, and
+dashes (\f[C]`...\[aq]\f[], \f[C]``..\[aq]\[aq]\f[], \f[C]\-\-\f[],
+\f[C]\-\-\-\f[]) when writing or reading LaTeX or ConTeXt.
+In reading LaTeX, parse the characters \f[C]`\f[], \f[C]\[aq]\f[], and
+\f[C]\-\f[] literally, rather than parsing ligatures for quotation marks
+and dashes.
+In writing LaTeX or ConTeXt, print unicode quotation mark and dash
+characters literally, rather than converting them to the standard ASCII
+TeX ligatures.
 Note: normally \f[C]\-\-smart\f[] is selected automatically for LaTeX
 and ConTeXt output, but it must be specified explicitly if
 \f[C]\-\-no\-tex\-ligatures\f[] is selected.
@@ -774,6 +806,7 @@ documents.
 \f[C]javascript\f[] obfuscates them using javascript.
 \f[C]references\f[] obfuscates them by printing their letters as decimal
 or hexadecimal character references.
+The default is \f[C]none\f[].
 .RS
 .RE
 .TP
@@ -795,7 +828,7 @@ Implies \f[C]\-\-standalone\f[].
 .TP
 .B \f[C]\-c\f[] \f[I]URL\f[], \f[C]\-\-css=\f[]\f[I]URL\f[]
 Link to a CSS style sheet.
-This option can be be used repeatedly to include multiple files.
+This option can be used repeatedly to include multiple files.
 They will be included in the order specified.
 .RS
 .RE
@@ -1014,8 +1047,8 @@ copy of the script, so it can be cached.
 .RE
 .TP
 .B \f[C]\-\-mathml\f[][\f[C]=\f[]\f[I]URL\f[]]
-Convert TeX math to MathML (in \f[C]docbook\f[] as well as \f[C]html\f[]
-and \f[C]html5\f[]).
+Convert TeX math to MathML (in \f[C]docbook\f[], \f[C]docbook5\f[],
+\f[C]html\f[] and \f[C]html5\f[]).
 In standalone \f[C]html\f[] output, a small javascript (or a link to
 such a script if a \f[I]URL\f[] is supplied) will be inserted that
 allows the MathML to be viewed on some browsers.
@@ -1060,6 +1093,8 @@ Render TeX formulas using an external script that converts TeX formulas
 to images.
 The formula will be concatenated with the URL provided.
 If \f[I]URL\f[] is not specified, the Google Chart API will be used.
+Note: the \f[C]\-\-webtex\f[] option will affect Markdown output as well
+as HTML.
 .RS
 .RE
 .TP
@@ -1135,9 +1170,18 @@ You can also override the system default templates for a given output
 format \f[I]FORMAT\f[] by putting a file
 \f[C]templates/default.*FORMAT*\f[] in the user data directory (see
 \f[C]\-\-data\-dir\f[], above).
-\f[I]Exceptions:\f[] For \f[C]odt\f[] output, customize the
-\f[C]default.opendocument\f[] template.
-For \f[C]pdf\f[] output, customize the \f[C]default.latex\f[] template.
+\f[I]Exceptions:\f[]
+.IP \[bu] 2
+For \f[C]odt\f[] output, customize the \f[C]default.opendocument\f[]
+template.
+.IP \[bu] 2
+For \f[C]pdf\f[] output, customize the \f[C]default.latex\f[] template
+(or the \f[C]default.beamer\f[] template, if you use
+\f[C]\-t\ beamer\f[], or the \f[C]default.context\f[] template, if you
+use \f[C]\-t\ context\f[]).
+.IP \[bu] 2
+\f[C]docx\f[] has no template (however, you can use
+\f[C]\-\-reference\-docx\f[] to customize the output).
 .PP
 Templates contain \f[I]variables\f[], which allow for the inclusion of
 arbitrary information at any point in the file.
@@ -1170,7 +1214,16 @@ author:
 .RE
 .TP
 .B \f[C]subtitle\f[]
-document subtitle; also used as subject in PDF metadata
+document subtitle, included in HTML, EPUB, LaTeX, ConTeXt, and Word
+docx; renders in LaTeX only when using a document class that supports
+\f[C]\\subtitle\f[], such as \f[C]beamer\f[] or the KOMA\-Script series
+(\f[C]scrartcl\f[], \f[C]scrreprt\f[], \f[C]scrbook\f[]).
+.RS
+.RE
+.TP
+.B \f[C]institute\f[]
+author affiliations (in LaTeX and Beamer only).
+Can be a list, when there are multiple authors.
 .RS
 .RE
 .TP
@@ -1218,6 +1271,11 @@ multiple values)
 body of document
 .RS
 .RE
+.TP
+.B \f[C]meta\-json\f[]
+JSON representation of all of the document\[aq]s metadata
+.RS
+.RE
 .SS Language variables
 .TP
 .B \f[C]lang\f[]
@@ -1238,7 +1296,7 @@ a list of other languages used in the document in the YAML metadata,
 according to BCP 47.
 For example: \f[C]otherlangs:\ [en\-GB,\ fr]\f[].
 This is automatically generated from the \f[C]lang\f[] attributes in all
-\f[C]span\f[]s and \f[C]div\f[]s but can be overriden.
+\f[C]span\f[]s and \f[C]div\f[]s but can be overridden.
 Currently only used by LaTeX through the generated
 \f[C]babel\-otherlangs\f[] and \f[C]polyglossia\-otherlangs\f[]
 variables.
@@ -1294,9 +1352,28 @@ base URL for reveal.js documents (defaults to \f[C]reveal.js\f[])
 themes for LaTeX \f[C]beamer\f[] documents
 .RS
 .RE
+.TP
+.B \f[C]navigation\f[]
+controls navigation symbols in \f[C]beamer\f[] documents (default is
+\f[C]empty\f[] for no navigation symbols; other valid values are
+\f[C]frame\f[], \f[C]vertical\f[], and \f[C]horizontal\f[]).
+.RS
+.RE
+.TP
+.B \f[C]section\-titles\f[]
+enables on "title pages" for new sections in \f[C]beamer\f[] documents
+(default = true).
+.RS
+.RE
 .SS Variables for LaTeX
 .PP
 LaTeX variables are used when creating a PDF.
+.TP
+.B \f[C]papersize\f[]
+paper size, e.g.
+\f[C]letter\f[], \f[C]A4\f[]
+.RS
+.RE
 .TP
 .B \f[C]fontsize\f[]
 font size for body text (e.g.
@@ -1319,6 +1396,12 @@ option for document class, e.g.
 .B \f[C]geometry\f[]
 option for \f[C]geometry\f[] package, e.g.
 \f[C]margin=1in\f[]; may be repeated for multiple options
+.RS
+.RE
+.TP
+.B \f[C]margin\-left\f[], \f[C]margin\-right\f[], \f[C]margin\-top\f[], \f[C]margin\-bottom\f[]
+sets margins, if \f[C]geometry\f[] is not used (otherwise
+\f[C]geometry\f[] overrides these)
 .RS
 .RE
 .TP
@@ -1368,18 +1451,16 @@ font encodings)
 .RS
 .RE
 .TP
-.B \f[C]linkcolor\f[], \f[C]toccolor\f[], \f[C]urlcolor\f[], \f[C]citecolor\f[]
-color for internal links, links in table of contents, external links,
-and citation links, using options available through \f[C]color\f[]
-package, e.g.
-\f[C]red\f[], \f[C]green\f[], \f[C]magenta\f[], \f[C]cyan\f[],
-\f[C]blue\f[], \f[C]black\f[]
+.B \f[C]colorlinks\f[]
+add color to link text; automatically enabled if any of
+\f[C]linkcolor\f[], \f[C]citecolor\f[], \f[C]urlcolor\f[], or
+\f[C]toccolor\f[] are set
 .RS
 .RE
 .TP
-.B \f[C]hidelinks\f[]
-enables \f[C]hidelinks\f[] option for \f[C]hyperref\f[], disabling link
-color
+.B \f[C]linkcolor\f[], \f[C]citecolor\f[], \f[C]urlcolor\f[], \f[C]toccolor\f[]
+color for internal links, citation links, external links, and links in
+table of contents: uses any of the predefined LaTeX colors
 .RS
 .RE
 .TP
@@ -1401,6 +1482,11 @@ in some classes
 .RS
 .RE
 .TP
+.B \f[C]thanks\f[]
+specifies contents of acknowledgments footnote after document title.
+.RS
+.RE
+.TP
 .B \f[C]toc\f[]
 include table of contents (can also be set using
 \f[C]\-\-toc/\-\-table\-of\-contents\f[])
@@ -1409,6 +1495,11 @@ include table of contents (can also be set using
 .TP
 .B \f[C]toc\-depth\f[]
 level of section to include in table of contents
+.RS
+.RE
+.TP
+.B \f[C]secnumdepth\f[]
+numbering depth for sections, if sections are numbered
 .RS
 .RE
 .TP
@@ -1423,7 +1514,13 @@ bibliography to use for resolving references
 .RE
 .TP
 .B \f[C]biblio\-style\f[]
-bibliography style, when used with \f[C]\-\-natbib\f[]
+bibliography style, when used with \f[C]\-\-natbib\f[] and
+\f[C]\-\-biblatex\f[].
+.RS
+.RE
+.TP
+.B \f[C]biblatexoptions\f[]
+list of options for biblatex.
 .RS
 .RE
 .SS Variables for ConTeXt
@@ -1441,6 +1538,12 @@ be repeated for multiple options
 .RS
 .RE
 .TP
+.B \f[C]margin\-left\f[], \f[C]margin\-right\f[], \f[C]margin\-top\f[], \f[C]margin\-bottom\f[]
+sets margins, if \f[C]layout\f[] is not used (otherwise \f[C]layout\f[]
+overrides these)
+.RS
+.RE
+.TP
 .B \f[C]fontsize\f[]
 font size for body text (e.g.
 \f[C]10pt\f[], \f[C]12pt\f[])
@@ -1453,9 +1556,16 @@ Switching)
 .RS
 .RE
 .TP
-.B \f[C]linkcolor\f[]
-color for links, e.g.
+.B \f[C]linkcolor\f[], \f[C]contrastcolor\f[]
+color for links outside and inside a page, e.g.
 \f[C]red\f[], \f[C]blue\f[] (see ConTeXt Color)
+.RS
+.RE
+.TP
+.B \f[C]linkstyle\f[]
+typeface style for links, e.g.
+\f[C]normal\f[], \f[C]bold\f[], \f[C]slanted\f[], \f[C]boldslanted\f[],
+\f[C]type\f[], \f[C]cap\f[], \f[C]small\f[]
 .RS
 .RE
 .TP
@@ -1856,11 +1966,11 @@ treated differently in CSS.
 .SS Extension: \f[C]implicit_header_references\f[]
 .PP
 Pandoc behaves as if reference links have been defined for each header.
-So, instead of
+So, to link to a header
 .IP
 .nf
 \f[C]
-[header\ identifiers](#header\-identifiers\-in\-html)
+#\ Header\ identifiers\ in\ HTML
 \f[]
 .fi
 .PP
@@ -1868,7 +1978,7 @@ you can simply write
 .IP
 .nf
 \f[C]
-[header\ identifiers]
+[Header\ identifiers\ in\ HTML]
 \f[]
 .fi
 .PP
@@ -1876,7 +1986,7 @@ or
 .IP
 .nf
 \f[C]
-[header\ identifiers][]
+[Header\ identifiers\ in\ HTML][]
 \f[]
 .fi
 .PP
@@ -1884,7 +1994,16 @@ or
 .IP
 .nf
 \f[C]
-[the\ section\ on\ header\ identifiers][header\ identifiers]
+[the\ section\ on\ header\ identifiers][header\ identifiers\ in
+HTML]
+\f[]
+.fi
+.PP
+instead of giving the identifier explicitly:
+.IP
+.nf
+\f[C]
+[Header\ identifiers\ in\ HTML](#header\-identifiers\-in\-html)
 \f[]
 .fi
 .PP
@@ -2741,10 +2860,10 @@ orange|3.09
 .PP
 The cells of pipe tables cannot contain block elements like paragraphs
 and lists, and cannot span multiple lines.
-Note also that in LaTeX/PDF output, the cells produced by pipe tables
-will not wrap, since there is no information available about relative
-widths.
-If you want content to wrap within cells, use multiline or grid tables.
+If a pipe table contains a row whose printable content is wider than the
+column width (see \f[C]\-\-columns\f[]), then the cell contents will
+wrap, with the relative cell widths determined by the widths of the
+separator lines.
 .PP
 Note: pandoc also recognizes pipe tables of the following form, as can
 be produced by Emacs\[aq] orgtbl\-mode:
@@ -3027,9 +3146,9 @@ quotes, \f[C]\-\-\-\f[] to em\-dashes, \f[C]\-\-\f[] to en\-dashes, and
 Nonbreaking spaces are inserted after certain abbreviations, such as
 "Mr."
 .PP
-Note: if your LaTeX template calls for the \f[C]csquotes\f[] package,
-pandoc will detect this automatically and use \f[C]\\enquote{...}\f[]
-for quoted text.
+Note: if your LaTeX template or any included header file call for the
+\f[C]csquotes\f[] package, pandoc will detect this automatically and use
+\f[C]\\enquote{...}\f[] for quoted text.
 .SS Inline formatting
 .SS Emphasis
 .PP
@@ -3174,7 +3293,7 @@ delimiters.
 TeX math will be printed in all output formats.
 How it is rendered depends on the output format:
 .TP
-.B Markdown, LaTeX, Emacs Org mode, ConTeXt
+.B Markdown, LaTeX, Emacs Org mode, ConTeXt, ZimWiki
 It will appear verbatim between \f[C]$\f[] characters.
 .RS
 .RE
@@ -3305,8 +3424,8 @@ it, but it has been made an extension so that it can be disabled if
 desired.)
 .PP
 The raw HTML is passed through unchanged in HTML, S5, Slidy, Slideous,
-DZSlides, EPUB, Markdown, and Textile output, and suppressed in other
-formats.
+DZSlides, EPUB, Markdown, Emacs Org mode, and Textile output, and
+suppressed in other formats.
 .SS Extension: \f[C]markdown_in_html_blocks\f[]
 .PP
 Standard Markdown allows you to include HTML "blocks": blocks of HTML
@@ -3400,7 +3519,7 @@ the material between the begin and end tags will be interpreted as raw
 LaTeX, not as Markdown.
 .PP
 Inline LaTeX is ignored in output formats other than Markdown, LaTeX,
-and ConTeXt.
+Emacs Org mode, and ConTeXt.
 .SS LaTeX macros
 .SS Extension: \f[C]latex_macros\f[]
 .PP
@@ -3409,8 +3528,14 @@ For output formats other than LaTeX, pandoc will parse LaTeX
 the resulting macros to all LaTeX math.
 So, for example, the following will work in all output formats, not just
 LaTeX:
-.PP
-⟨\f[I]a\f[], \f[I]b\f[], \f[I]c\f[]⟩
+.IP
+.nf
+\f[C]
+\\newcommand{\\tuple}[1]{\\langle\ #1\ \\rangle}
+
+$\\tuple{a,\ b,\ c}$
+\f[]
+.fi
 .PP
 In LaTeX output, the \f[C]\\newcommand\f[] definition will simply be
 passed unchanged to the output.
@@ -3607,6 +3732,61 @@ One way to do this is to insert a nonbreaking space after the image:
 ![This\ image\ won\[aq]t\ be\ a\ figure](/url/of/image.png)\\\ 
 \f[]
 .fi
+.SS Extension: \f[C]link_attributes\f[]
+.PP
+Attributes can be set on links and images:
+.IP
+.nf
+\f[C]
+An\ inline\ ![image](foo.jpg){#id\ .class\ width=30\ height=20px}
+and\ a\ reference\ ![image][ref]\ with\ attributes.
+
+[ref]:\ foo.jpg\ "optional\ title"\ {#id\ .class\ key=val\ key2="val\ 2"}
+\f[]
+.fi
+.PP
+(This syntax is compatible with PHP Markdown Extra when only
+\f[C]#id\f[] and \f[C]\&.class\f[] are used.)
+.PP
+For HTML and EPUB, all attributes except \f[C]width\f[] and
+\f[C]height\f[] (but including \f[C]srcset\f[] and \f[C]sizes\f[]) are
+passed through as is.
+The other writers ignore attributes that are not supported by their
+output format.
+.PP
+The \f[C]width\f[] and \f[C]height\f[] attributes on images are treated
+specially.
+When used without a unit, the unit is assumed to be pixels.
+However, any of the following unit identifiers can be used: \f[C]px\f[],
+\f[C]cm\f[], \f[C]mm\f[], \f[C]in\f[], \f[C]inch\f[] and \f[C]%\f[].
+There must not be any spaces between the number and the unit.
+For example:
+.IP
+.nf
+\f[C]
+![](file.jpg){\ width=50%\ }
+\f[]
+.fi
+.IP \[bu] 2
+Dimensions are converted to inches for output in page\-based formats
+like LaTeX.
+Dimensions are converted to pixels for output in HTML\-like formats.
+Use the \f[C]\-\-dpi\f[] option to specify the number of pixels per
+inch.
+The default is 96dpi.
+.IP \[bu] 2
+The \f[C]%\f[] unit is generally relative to some available space.
+For example the above example will render to
+\f[C]<img\ href="file.jpg"\ style="width:\ 50%;"\ />\f[] (HTML),
+\f[C]\\includegraphics[width=0.5\\textwidth]{file.jpg}\f[] (LaTeX), or
+\f[C]\\externalfigure[file.jpg][width=0.5\\textwidth]\f[] (ConTeXt).
+.IP \[bu] 2
+Some output formats have a notion of a class (ConTeXt) or a unique
+identifier (LaTeX \f[C]\\caption\f[]), or both (HTML).
+.IP \[bu] 2
+When no \f[C]width\f[] or \f[C]height\f[] attributes are specified, the
+fallback is to look at the image resolution and the dpi metadata
+embedded in the image file.
 .SS Footnotes
 .SS Extension: \f[C]footnotes\f[]
 .PP
@@ -3789,9 +3969,10 @@ prevent a phrase from being capitalized as title case
 \f[C]pandoc\-citeproc\ \-j\f[] and \f[C]\-y\f[] interconvert the CSL
 JSON and CSL YAML formats as far as possible.
 .PP
-As an alternative to specifying a bibliography file, you can include the
-citation data directly in the \f[C]references\f[] field of the
-document\[aq]s YAML metadata.
+As an alternative to specifying a bibliography file using
+\f[C]\-\-bibliography\f[] or the YAML metadata field
+\f[C]bibliography\f[], you can include the citation data directly in the
+\f[C]references\f[] field of the document\[aq]s YAML metadata.
 The field should contain an array of YAML\-encoded references, for
 example:
 .IP
@@ -3836,6 +4017,9 @@ By default, \f[C]pandoc\-citeproc\f[] will use the Chicago Manual of
 Style author\-date format.
 The CSL project provides further information on finding and editing
 styles.
+.PP
+To make your citations hyperlinks to the corresponding bibliography
+entries, add \f[C]link\-citations:\ true\f[] to your YAML metadata.
 .PP
 Citations go inside square brackets and are separated by semicolons.
 Each citation must have a key, composed of \[aq]\@\[aq] + the citation
@@ -3937,6 +4121,8 @@ In order to do so, specify bibliography files as outlined above, and add
 invocation.
 Bear in mind that bibliography files have to be in respective format
 (either BibTeX or BibLaTeX).
+.PP
+For more information, see the pandoc\-citeproc man page.
 .SS Non\-pandoc extensions
 .PP
 The following Markdown syntax extensions are not enabled by default in
@@ -3959,6 +4145,16 @@ treated as spaces or as hard line breaks.
 This option is intended for use with East Asian languages where spaces
 are not used between words, but text is divided into lines for
 readability.
+.SS Extension: \f[C]east_asian_line_breaks\f[]
+.PP
+Causes newlines within a paragraph to be ignored, rather than being
+treated as spaces or as hard line breaks, when they occur between two
+East Asian wide characters.
+This is a better choice than \f[C]ignore_line_breaks\f[] for texts that
+include a mix of East Asian wide characters and other characters.
+.SS Extension: \f[C]emoji\f[]
+.PP
+Parses textual emojis like \f[C]:smile:\f[] as Unicode emoticons.
 .SS Extension: \f[C]tex_math_single_backslash\f[]
 .PP
 Causes anything between \f[C]\\(\f[] and \f[C]\\)\f[] to be interpreted
@@ -4019,12 +4215,21 @@ Causes the identifiers produced by \f[C]auto_identifiers\f[] to be pure
 ASCII.
 Accents are stripped off of accented latin letters, and non\-latin
 letters are omitted.
-.SS Extension: \f[C]link_attributes\f[]
+.SS Extension: \f[C]mmd_link_attributes\f[]
 .PP
 Parses multimarkdown style key\-value attributes on link and image
 references.
-Note that pandoc\[aq]s internal document model provides nowhere to put
-these, so they are presently just ignored.
+This extension should not be confused with the \f[C]link_attributes\f[]
+extension.
+.IP
+.nf
+\f[C]
+This\ is\ a\ reference\ ![image][ref]\ with\ multimarkdown\ attributes.
+
+[ref]:\ http://path.to/image\ "Image\ title"\ width=20px\ height=30px
+\ \ \ \ \ \ \ id=myId\ class="myClass1\ myClass2"
+\f[]
+.fi
 .SS Extension: \f[C]mmd_header_identifiers\f[]
 .PP
 Parses multimarkdown style header identifiers (in square brackets, after
@@ -4053,24 +4258,24 @@ variants are supported:
 \f[C]footnotes\f[], \f[C]pipe_tables\f[], \f[C]raw_html\f[],
 \f[C]markdown_attribute\f[], \f[C]fenced_code_blocks\f[],
 \f[C]definition_lists\f[], \f[C]intraword_underscores\f[],
-\f[C]header_attributes\f[], \f[C]abbreviations\f[],
-\f[C]shortcut_reference_links\f[].
+\f[C]header_attributes\f[], \f[C]link_attributes\f[],
+\f[C]abbreviations\f[], \f[C]shortcut_reference_links\f[].
 .RS
 .RE
 .TP
 .B \f[C]markdown_github\f[] (GitHub\-Flavored Markdown)
-\f[C]pipe_tables\f[], \f[C]raw_html\f[],
-\f[C]tex_math_single_backslash\f[], \f[C]fenced_code_blocks\f[],
+\f[C]pipe_tables\f[], \f[C]raw_html\f[], \f[C]fenced_code_blocks\f[],
 \f[C]auto_identifiers\f[], \f[C]ascii_identifiers\f[],
 \f[C]backtick_code_blocks\f[], \f[C]autolink_bare_uris\f[],
 \f[C]intraword_underscores\f[], \f[C]strikeout\f[],
-\f[C]hard_line_breaks\f[], \f[C]shortcut_reference_links\f[].
+\f[C]hard_line_breaks\f[], \f[C]emoji\f[],
+\f[C]shortcut_reference_links\f[].
 .RS
 .RE
 .TP
 .B \f[C]markdown_mmd\f[] (MultiMarkdown)
-\f[C]pipe_tables\f[] \f[C]raw_html\f[], \f[C]markdown_attribute\f[],
-\f[C]link_attributes\f[], \f[C]raw_tex\f[],
+\f[C]pipe_tables\f[], \f[C]raw_html\f[], \f[C]markdown_attribute\f[],
+\f[C]mmd_link_attributes\f[], \f[C]raw_tex\f[],
 \f[C]tex_math_double_backslash\f[], \f[C]intraword_underscores\f[],
 \f[C]mmd_title_block\f[], \f[C]footnotes\f[], \f[C]definition_lists\f[],
 \f[C]all_symbols_escapable\f[], \f[C]implicit_header_references\f[],
@@ -4486,8 +4691,9 @@ For example:
 .nf
 \f[C]
 <audio\ controls="1">
-\ <source\ src="http://www.sixbarsjail.it/tmp/bach_toccata.mp3"
-\ data\-external="1"\ type="audio/mpeg"></source>
+\ \ <source\ src="http://example.com/music/toccata.mp3"
+\ \ \ \ \ \ \ \ \ \ data\-external="1"\ type="audio/mpeg">
+\ \ </source>
 </audio>
 \f[]
 .fi
@@ -4599,40 +4805,47 @@ Released under the GPL, version 2 or greater.
 This software carries no warranty of any kind.
 (See COPYRIGHT for full copyright and warranty notices.)
 .PP
-Contributors include Aaron Wolen, Albert Krewinkel, Alexander
+Contributors include Aaron Wolen, Albert Krewinkel, Alex Vong, Alexander
 Kondratskiy, Alexander Sulfrian, Alexander V Vershilov, Alfred
 Wechselberger, Andreas Lööw, Andrew Dunning, Antoine Latter, Arata
 Mizuki, Arlo O\[aq]Keeffe, Artyom Kazak, Ben Gamari, Beni
-Cherniavsky\-Paskin, Bjorn Buckwalter, Bradley Kuhn, Brent Yorgey, Bryan
-O\[aq]Sullivan, B.
-Scott Michel, Caleb McDaniel, Calvin Beck, Christoffer Ackelman,
-Christoffer Sawicki, Clare Macrae, Clint Adams, Conal Elliott, Craig S.
-Bosma, Daniel Bergey, Daniel T.
+Cherniavsky\-Paskin, Benoit Schweblin, Bjorn Buckwalter, Bradley Kuhn,
+Brent Yorgey, Bryan O\[aq]Sullivan, B.
+Scott Michel, Caleb McDaniel, Calvin Beck, Carlos Sosa, Chris Black,
+Christian Conkle, Christoffer Ackelman, Christoffer Sawicki, Clare
+Macrae, Clint Adams, Conal Elliott, Craig S.
+Bosma, csforste, Daniel Bergey, Daniel T.
 Staal, David Lazar, David Röthlisberger, Denis Laxalde, Douglas Calvert,
 Douglas F.
-Calvert, Eric Kow, Eric Seidel, Florian Eitel, François Gannaz, Freiric
-Barral, Fyodor Sheremetyev, Gabor Pali, Gavin Beatty, Greg Maslov,
+Calvert, Emanuel Evans, Emily Eisenberg, Eric Kow, Eric Seidel, Florian
+Eitel, François Gannaz, Freiric Barral, Freirich Raabe, Fyodor
+Sheremetyev, Gabor Pali, Gavin Beatty, Gottfried Haider, Greg Maslov,
 Grégory Bataille, Greg Rundlett, gwern, Gwern Branwen, Hans\-Peter
-Deifel, Henry de Valence, Ilya V.
-Portnov, infinity0x, Jaime Marquínez Ferrándiz, James Aspnes, Jamie F.
-Olson, Jan Larres, Jason Ronallo, Jeff Arnold, Jeff Runningen, Jens
-Petersen, Jérémy Bobbio, Jesse Rosenthal, J.
+Deifel, Henrik Tramberend, Henry de Valence, ickc, Ilya V.
+Portnov, infinity0x, Ivo Clarysse, Jaime Marquínez Ferrándiz, James
+Aspnes, Jamie F.
+Olson, Jan Larres, Jan Schulz, Jason Ronallo, Jeff Arnold, Jeff
+Runningen, Jens Petersen, Jérémy Bobbio, Jesse Rosenthal, J.
 Lewis Muir, Joe Hillenbrand, John MacFarlane, Jonas Smedegaard, Jonathan
-Daugherty, Josef Svenningsson, Jose Luis Duran, Julien Cretel, Justin
-Bogner, Kelsey Hightower, Konstantin Zudov, Lars\-Dominik Braun, Luke
-Plant, Mark Szepieniec, Mark Wright, Masayoshi Takahashi, Matej Kollar,
-Mathias Schenner, Matthew Pickering, Matthias C.
+Daugherty, Josef Svenningsson, Jose Luis Duran, Julien Cretel, Juliusz
+Gonera, Justin Bogner, Kelsey Hightower, Kolen Cheung, Konstantin Zudov,
+Kristof Bastiaensen, Lars\-Dominik Braun, Luke Plant, Mark Szepieniec,
+Mark Wright, Martin Linn, Masayoshi Takahashi, Matej Kollar, Mathias
+Schenner, Mathieu Duponchelle, Matthew Eddey, Matthew Pickering,
+Matthias C.
 M.
-Troffaes, Max Bolingbroke, Max Rydahl Andersen, mb21, Merijn
-Verstraaten, Michael Snoyman, Michael Thompson, MinRK, Nathan Gass, Neil
-Mayhew, Nick Bart, Nicolas Kaiser, Nikolay Yakimov, nkalvi, Paulo
+Troffaes, Mauro Bieg, Max Bolingbroke, Max Rydahl Andersen, Merijn
+Verstraaten, Michael Beaumont, Michael Chladek, Michael Snoyman, Michael
+Thompson, MinRK, Nathan Gass, Neil Mayhew, Nick Bart, Nicolas Kaiser,
+Nikolay Yakimov, nkalvi, Ophir Lifshitz, Pablo Rodríguez, Paulo
 Tanimoto, Paul Rivier, Peter Wang, Philippe Ombredanne, Phillip Alday,
-Puneeth Chaganti, qerub, Ralf Stephan, Recai Oktaş, rodja.trappe,
-RyanGlScott, Scott Morrison, Sergei Trofimovich, Sergey Astanin, Shahbaz
-Youssefi, Shaun Attfield, shreevatsa.public, Simon Hengel, Sumit
-Sahrawat, takahashim, thsutton, Tim Lin, Timothy Humphries, Todd
-Sifleet, Tom Leese, Uli Köhler, Václav Zeman, Viktor Kronvall, Vincent,
-Wikiwide, and Xavier Olive.
+Prayag Verma, Puneeth Chaganti, qerub, Ralf Stephan, Raniere Silva,
+Recai Oktaş, robabla, rodja.trappe, rski, RyanGlScott, Scott Morrison,
+Sergei Trofimovich, Sergey Astanin, Shahbaz Youssefi, Shaun Attfield,
+Sidarth Kapur, shreevatsa.public, Simon Hengel, Sumit Sahrawat,
+takahashim, thsutton, Tim Lin, Timothy Humphries, Tiziano Müller, Thomas
+Hodgson, Todd Sifleet, Tom Leese, Uli Köhler, Václav Zeman, Viktor
+Kronvall, Vincent, Wikiwide, and Xavier Olive.
 .PP
 The Pandoc source code and all documentation may be downloaded
 from <http://pandoc.org>.

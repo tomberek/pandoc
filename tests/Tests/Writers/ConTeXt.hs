@@ -7,11 +7,11 @@ import Text.Pandoc
 import Tests.Helpers
 import Tests.Arbitrary()
 
-context :: (ToString a, ToPandoc a) => a -> String
+context :: (ToPandoc a) => a -> String
 context = writeConTeXt def . toPandoc
 
-context' :: (ToString a, ToPandoc a) => a -> String
-context' = writeConTeXt def{ writerWrapText = False } . toPandoc
+context' :: (ToPandoc a) => a -> String
+context' = writeConTeXt def{ writerWrapText = WrapNone } . toPandoc
 
 {-
   "my test" =: X =?> Y

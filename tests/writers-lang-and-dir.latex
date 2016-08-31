@@ -13,7 +13,6 @@
     \usepackage{fontspec}
   \fi
   \defaultfontfeatures{Ligatures=TeX,Scale=MatchLowercase}
-  \newcommand{\euro}{€}
 \fi
 % use upquote if available, for straight quotes in verbatim environments
 \IfFileExists{upquote.sty}{\usepackage{upquote}}{}
@@ -22,23 +21,22 @@
 \usepackage{microtype}
 \UseMicrotypeSet[protrusion]{basicmath} % disable protrusion for tt fonts
 }{}
-\usepackage{hyperref}
-\PassOptionsToPackage{usenames,dvipsnames}{color} % color is loaded by hyperref
-\hypersetup{unicode=true,
+\usepackage[unicode=true]{hyperref}
+\hypersetup{
             pdfborder={0 0 0},
             breaklinks=true}
 \urlstyle{same}  % don't use monospace font for urls
 \ifnum 0\ifxetex 1\fi\ifluatex 1\fi=0 % if pdftex
-  \usepackage[shorthands=off,ngerman,british,ngerman,spanish,french,main=english]{babel}
+  \usepackage[shorthands=off,ngerman,british,nswissgerman,spanish,french,main=english]{babel}
   \newcommand{\textgerman}[2][]{\foreignlanguage{ngerman}{#2}}
-  \newenvironment{german}[1]{\begin{otherlanguage}{ngerman}}{\end{otherlanguage}}
+  \newenvironment{german}[2][]{\begin{otherlanguage}{ngerman}}{\end{otherlanguage}}
   \newcommand{\textenglish}[2][]{\foreignlanguage{british}{#2}}
-  \newenvironment{english}[1]{\begin{otherlanguage}{british}}{\end{otherlanguage}}
+  \newenvironment{english}[2][]{\begin{otherlanguage}{british}}{\end{otherlanguage}}
   \let\oritextspanish\textspanish
   \AddBabelHook{spanish}{beforeextras}{\renewcommand{\textspanish}{\oritextspanish}}
   \AddBabelHook{spanish}{afterextras}{\renewcommand{\textspanish}[2][]{\foreignlanguage{spanish}{##2}}}
   \newcommand{\textfrench}[2][]{\foreignlanguage{french}{#2}}
-  \newenvironment{french}[1]{\begin{otherlanguage}{french}}{\end{otherlanguage}}
+  \newenvironment{french}[2][]{\begin{otherlanguage}{french}}{\end{otherlanguage}}
 \else
   \usepackage{polyglossia}
   \setmainlanguage[]{english}
@@ -48,12 +46,25 @@
   \setotherlanguage[]{spanish}
   \setotherlanguage[]{french}
 \fi
+\IfFileExists{parskip.sty}{%
+\usepackage{parskip}
+}{% else
 \setlength{\parindent}{0pt}
 \setlength{\parskip}{6pt plus 2pt minus 1pt}
+}
 \setlength{\emergencystretch}{3em}  % prevent overfull lines
 \providecommand{\tightlist}{%
   \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
 \setcounter{secnumdepth}{0}
+% Redefines (sub)paragraphs to behave more like sections
+\ifx\paragraph\undefined\else
+\let\oldparagraph\paragraph
+\renewcommand{\paragraph}[1]{\oldparagraph{#1}\mbox{}}
+\fi
+\ifx\subparagraph\undefined\else
+\let\oldsubparagraph\subparagraph
+\renewcommand{\subparagraph}[1]{\oldsubparagraph{#1}\mbox{}}
+\fi
 \ifxetex
   % load bidi as late as possible as it modifies e.g. graphicx
     \usepackage{bidi}
@@ -68,16 +79,6 @@
 
 \date{}
 
-% Redefines (sub)paragraphs to behave more like sections
-\ifx\paragraph\undefined\else
-\let\oldparagraph\paragraph
-\renewcommand{\paragraph}[1]{\oldparagraph{#1}\mbox{}}
-\fi
-\ifx\subparagraph\undefined\else
-\let\oldsubparagraph\subparagraph
-\renewcommand{\subparagraph}[1]{\oldsubparagraph{#1}\mbox{}}
-\fi
-
 \begin{document}
 
 \section{Empty Divs and Spans}\label{empty-divs-and-spans}
@@ -88,7 +89,7 @@ div contents
 
 and more text.
 
-Next paragraph with a span and a word-thatincludesaspanright?
+Next paragraph with a {span} and a word-thatincludesa{span}right?
 
 \section{Directionality}\label{directionality}
 

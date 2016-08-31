@@ -35,10 +35,12 @@ import Text.Pandoc.Writers.Shared
 import Text.Pandoc.Options
 import Text.Pandoc.Walk (query)
 import Text.Printf ( printf )
-import Data.List ( intercalate )
+import Data.List ( intercalate, intersperse )
 import Data.Char ( ord )
+import Data.Maybe ( catMaybes )
 import Control.Monad.State
 import Text.Pandoc.Pretty
+import Text.Pandoc.ImageSize
 import Text.Pandoc.Templates ( renderTemplate' )
 import Network.URI ( isURI, unEscapeString )
 
@@ -62,7 +64,7 @@ writeConTeXt options document =
 
 pandocToConTeXt :: WriterOptions -> Pandoc -> State WriterState String
 pandocToConTeXt options (Pandoc meta blocks) = do
-  let colwidth = if writerWrapText options
+  let colwidth = if writerWrapText options == WrapAuto
                     then Just $ writerColumns options
                     else Nothing
   metadata <- metaToJSON options
@@ -71,6 +73,14 @@ pandocToConTeXt options (Pandoc meta blocks) = do
               meta
   body <- mapM (elementToConTeXt options) $ hierarchicalize blocks
   let main = (render colwidth . vcat) body
+  let layoutFromMargins = intercalate [','] $ catMaybes $
+                              map (\(x,y) ->
+                                ((x ++ "=") ++) <$> getField y metadata)
+                              [("leftmargin","margin-left")
+                              ,("rightmargin","margin-right")
+                              ,("top","margin-top")
+                              ,("bottom","margin-bottom")
+                              ]
   let context =   defField "toc" (writerTableOfContents options)
                 $ defField "placelist" (intercalate ("," :: String) $
                      take (writerTOCDepth options + if writerChapters options
@@ -79,6 +89,7 @@ pandocToConTeXt options (Pandoc meta blocks) = do
                        ["chapter","section","subsection","subsubsection",
                         "subsubsubsection","subsubsubsubsection"])
                 $ defField "body" main
+                $ defField "layout" layoutFromMargins
                 $ defField "number-sections" (writerNumberSections options)
                 $ metadata
   let context' =  defField "context-lang" (maybe "" (fromBcp47 . splitBy (=='-')) $
@@ -141,10 +152,14 @@ blockToConTeXt :: Block
 blockToConTeXt Null = return empty
 blockToConTeXt (Plain lst) = inlineListToConTeXt lst
 -- title beginning with fig: indicates that the image is a figure
-blockToConTeXt (Para [Image txt (src,'f':'i':'g':':':_)]) = do
+blockToConTeXt (Para [Image attr txt (src,'f':'i':'g':':':_)]) = do
   capt <- inlineListToConTeXt txt
-  return $ blankline $$ "\\placefigure" <> braces capt <>
-           braces ("\\externalfigure" <> brackets (text src)) <> blankline
+  img  <- inlineToConTeXt (Image attr txt (src, ""))
+  let (ident, _, _) = attr
+      label = if null ident
+                 then empty
+                 else "[]" <> brackets (text $ toLabel ident)
+  return $ blankline $$ "\\placefigure" <> label <> braces capt <> img <> blankline
 blockToConTeXt (Para lst) = do
   contents <- inlineListToConTeXt lst
   return $ contents <> blankline
@@ -264,7 +279,17 @@ blockListToConTeXt lst = liftM vcat $ mapM blockToConTeXt lst
 -- | Convert list of inline elements to ConTeXt.
 inlineListToConTeXt :: [Inline]  -- ^ Inlines to convert
                     -> State WriterState Doc
-inlineListToConTeXt lst = liftM hcat $ mapM inlineToConTeXt lst
+inlineListToConTeXt lst = liftM hcat $ mapM inlineToConTeXt $ addStruts lst
+  -- We add a \strut after a line break that precedes a space,
+  -- or the space gets swallowed
+  where addStruts (LineBreak : s : xs) | isSpacey s =
+           LineBreak : RawInline (Format "context") "\\strut " : s :
+             addStruts xs
+        addStruts (x:xs) = x : addStruts xs
+        addStruts [] = []
+        isSpacey Space = True
+        isSpacey (Str ('\160':_)) = True
+        isSpacey _ = False
 
 -- | Convert inline element to ConTeXt
 inlineToConTeXt :: Inline    -- ^ Inline to convert
@@ -310,9 +335,15 @@ inlineToConTeXt (RawInline "context" str) = return $ text str
 inlineToConTeXt (RawInline "tex" str) = return $ text str
 inlineToConTeXt (RawInline _ _) = return empty
 inlineToConTeXt (LineBreak) = return $ text "\\crlf" <> cr
+inlineToConTeXt SoftBreak = do
+  wrapText <- gets (writerWrapText . stOptions)
+  return $ case wrapText of
+               WrapAuto     -> space
+               WrapNone     -> space
+               WrapPreserve -> cr
 inlineToConTeXt Space = return space
 -- Handle HTML-like internal document references to sections
-inlineToConTeXt (Link txt          (('#' : ref), _)) = do
+inlineToConTeXt (Link _ txt (('#' : ref), _)) = do
   opts <- gets stOptions
   contents <-  inlineListToConTeXt txt
   let ref' = toLabel $ stringToConTeXt opts ref
@@ -320,7 +351,7 @@ inlineToConTeXt (Link txt          (('#' : ref), _)) = do
            <> braces contents
            <> brackets (text ref')
 
-inlineToConTeXt (Link txt          (src, _))      = do
+inlineToConTeXt (Link _ txt (src, _)) = do
   let isAutolink = txt == [Str (unEscapeString src)]
   st <- get
   let next = stNextRef st
@@ -335,11 +366,29 @@ inlineToConTeXt (Link txt          (src, _))      = do
                   else brackets empty <> brackets contents)
            <> "\\from"
            <> brackets (text ref)
-inlineToConTeXt (Image _ (src, _)) = do
-  let src' = if isURI src
+inlineToConTeXt (Image attr@(_,cls,_) _ (src, _)) = do
+  opts <- gets stOptions
+  let showDim dir = let d = text (show dir) <> "="
+                    in case (dimension dir attr) of
+                         Just (Pixel a)   ->
+                           [d <> text (showInInch opts (Pixel a)) <> "in"]
+                         Just (Percent a) ->
+                           [d <> text (showFl (a / 100)) <> "\\textwidth"]
+                         Just dim         ->
+                           [d <> text (show dim)]
+                         Nothing          ->
+                           []
+      dimList = showDim Width ++ showDim Height
+      dims = if null dimList
+                then empty
+                else brackets $ cat (intersperse "," dimList)
+      clas = if null cls
+                then empty
+                else brackets $ text $ toLabel $ head cls
+      src' = if isURI src
                 then src
                 else unEscapeString src
-  return $ braces $ "\\externalfigure" <> brackets (text src')
+  return $ braces $ "\\externalfigure" <> brackets (text src') <> dims <> clas
 inlineToConTeXt (Note contents) = do
   contents' <- blockListToConTeXt contents
   let codeBlock x@(CodeBlock _ _) = [x]
@@ -410,7 +459,6 @@ fromBcp47 ("en":"GB":_)   = "en-gb"
 fromBcp47 ("grc":_)       = "agr"
 fromBcp47 x               = fromIso $ head x
   where
-    fromIso "cz" = "cs"
     fromIso "el" = "gr"
     fromIso "eu" = "ba"
     fromIso "he" = "il"

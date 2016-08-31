@@ -42,9 +42,9 @@ tests = [ "line block with blank line" =:
                                   , (text "IP address", [para "10.0.0.19"])
                                   , (str "Size", [para "3ru"])
                                   , (str "Version", [para "1"])
-                                  , (str "Indentation", [para "Since the field marker may be quite long, the second and subsequent lines of the field body do not have to line up with the first line, but they must be indented relative to the field name marker, and they must line up with each other."])
+                                  , (str "Indentation", [para "Since the field marker may be quite long, the second\nand subsequent lines of the field body do not have to line up\nwith the first line, but they must be indented relative to the\nfield name marker, and they must line up with each other."])
                                   , (text "Parameter i", [para "integer"])
-                                  , (str "Final", [para "item on two lines"])
+                                  , (str "Final", [para "item\non two lines"])
                                   ])
           , "metadata" =: unlines
              [ "====="
@@ -87,12 +87,42 @@ tests = [ "line block with blank line" =:
           para (link "http://google.com" "" "http://google.com" <> ", " <>
                 link "http://yahoo.com" "" "http://yahoo.com" <> "; " <>
                 link "http://foo.bar.baz" "" "http://foo.bar.baz" <> ". " <>
+                softbreak <>
                 link "http://foo.bar/baz_(bam)" "" "http://foo.bar/baz_(bam)"
                 <> " (" <> link "http://foo.bar" "" "http://foo.bar" <> ")")
         , "Reference names with special characters" =:
                    ("A-1-B_2_C:3:D+4+E.5.F_\n\n" ++
                    ".. _A-1-B_2_C:3:D+4+E.5.F: https://example.com\n") =?>
                    para (link "https://example.com" "" "A-1-B_2_C:3:D+4+E.5.F")
+        , "Code directive with class and number-lines" =: unlines
+            [ ".. code::python"
+            , "   :number-lines: 34"
+            , "   :class: class1 class2 class3"
+            , ""
+            , "  def func(x):"
+            , "    return y"
+            ]  =?>
+              ( doc $ codeBlockWith
+                  ( ""
+                  , ["sourceCode", "python", "numberLines", "class1", "class2", "class3"]
+                  , [ ("startFrom", "34") ]
+                  )
+                  "def func(x):\n  return y"
+              )
+        , "Code directive with number-lines, no line specified" =: unlines
+            [ ".. code::python"
+            , "   :number-lines: "
+            , ""
+            , "  def func(x):"
+            , "    return y"
+            ]  =?>
+              ( doc $ codeBlockWith
+                  ( ""
+                  , ["sourceCode", "python", "numberLines"]
+                  , [ ("startFrom", "") ]
+                  )
+                  "def func(x):\n  return y"
+              )
         , testGroup "literal / line / code blocks"
           [ "indented literal block" =: unlines
             [ "::"

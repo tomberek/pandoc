@@ -1,42 +1,36 @@
 Name:            pandoc
-Version:         1.15.2
+Version:         1.17.2
 Cabal-Version:   >= 1.10
 Build-Type:      Custom
 License:         GPL
 License-File:    COPYING
-Copyright:       (c) 2006-2015 John MacFarlane
+Copyright:       (c) 2006-2016 John MacFarlane
 Author:          John MacFarlane <jgm@berkeley.edu>
 Maintainer:      John MacFarlane <jgm@berkeley.edu>
 Bug-Reports:     https://github.com/jgm/pandoc/issues
 Stability:       alpha
 Homepage:        http://pandoc.org
 Category:        Text
-Tested-With:     GHC == 7.4.2, GHC == 7.6.3, GHC == 7.8.4, GHC == 7.10.2
+Tested-With:     GHC == 7.6.3, GHC == 7.8.4, GHC == 7.10.2, GHC == 8.0.1
 Synopsis:        Conversion between markup formats
 Description:     Pandoc is a Haskell library for converting from one markup
                  format to another, and a command-line tool that uses
-                 this library. It can read markdown and (subsets of) HTML,
-                 reStructuredText, LaTeX, DocBook, MediaWiki markup, TWiki
-                 markup, Haddock markup, OPML, Emacs Org-Mode, txt2tags,
-                 Word Docx, ODT, and Textile, and it can write
-                 Markdown, reStructuredText, XHTML, HTML 5, LaTeX,
-                 ConTeXt, DocBook, OPML, OpenDocument, ODT,
-                 Word docx, RTF, MediaWiki, DokuWiki, Textile, groff man
-                 pages, plain text, Emacs Org-Mode, AsciiDoc, Haddock markup,
-                 EPUB (v2 and v3), FictionBook2, InDesign ICML, and several
-                 kinds of HTML/javascript slide shows (S5, Slidy, Slideous,
-                 DZSlides, reveal.js).
+                 this library. It can read several dialects of Markdown and
+                 (subsets of) HTML, reStructuredText, LaTeX, DocBook,
+                 MediaWiki markup, TWiki markup, Haddock markup, OPML,
+                 Emacs Org-Mode, txt2tags, Word Docx, ODT, and Textile, and
+                 it can write Markdown, reStructuredText, XHTML, HTML 5,
+                 LaTeX, ConTeXt, DocBook, OPML, TEI, OpenDocument, ODT,
+                 Word docx, RTF, MediaWiki, DokuWiki, ZimWiki, Textile,
+                 groff man pages, plain text, Emacs Org-Mode, AsciiDoc,
+                 Haddock markup, EPUB (v2 and v3), FictionBook2, InDesign ICML,
+                 and several kinds of HTML/javascript slide shows (S5, Slidy,
+                 Slideous, DZSlides, reveal.js).
                  .
-                 Pandoc extends standard markdown syntax with footnotes,
-                 embedded LaTeX, definition lists, tables, and other
-                 features. A compatibility mode is provided for those
-                 who need a drop-in replacement for Markdown.pl.
-                 .
-                 In contrast to existing tools for converting markdown
-                 to HTML, which use regex substitutions, pandoc has
-                 a modular design: it consists of a set of readers,
-                 which parse text in a given format and produce a native
-                 representation of the document, and a set of writers,
+                 In contrast to most existing tools for converting Markdown
+                 to HTML, pandoc has a modular design: it consists of a set of
+                 readers, which parse text in a given format and produce a
+                 native representation of the document, and a set of writers,
                  which convert this native representation into a target
                  format. Thus, adding an input or output format requires
                  only adding a reader or writer.
@@ -45,6 +39,8 @@ Data-Files:
                  data/templates/default.html
                  data/templates/default.html5
                  data/templates/default.docbook
+                 data/templates/default.docbook5
+                 data/templates/default.tei
                  data/templates/default.beamer
                  data/templates/default.opendocument
                  data/templates/default.icml
@@ -59,6 +55,7 @@ Data-Files:
                  data/templates/default.plain
                  data/templates/default.mediawiki
                  data/templates/default.dokuwiki
+                 data/templates/default.zimwiki
                  data/templates/default.rtf
                  data/templates/default.s5
                  data/templates/default.slidy
@@ -108,11 +105,13 @@ Data-Files:
                  -- bash completion template
                  -- data/bash_completion.tpl
                  -- documentation
-                 README, COPYRIGHT
+                 MANUAL.txt, COPYRIGHT
 Extra-Source-Files:
                  -- documentation
-                 INSTALL, BUGS, CONTRIBUTING.md, changelog
+                 INSTALL, BUGS, README.md, CONTRIBUTING.md, changelog
                  man/pandoc.1
+                 -- stack build plan
+                 stack.yaml
                  -- files needed to build man page
                  man/capitalizeHeaders.hs
                  man/removeNotes.hs
@@ -148,7 +147,9 @@ Extra-Source-Files:
                  tests/s5-inserts.html
                  tests/tables.context
                  tests/tables.docbook
+                 tests/tables.docbook5
                  tests/tables.dokuwiki
+                 tests/tables.zimwiki
                  tests/tables.icml
                  tests/tables.html
                  tests/tables.latex
@@ -156,6 +157,7 @@ Extra-Source-Files:
                  tests/tables.plain
                  tests/tables.markdown
                  tests/tables.mediawiki
+                 tests/tables.tei
                  tests/tables.textile
                  tests/tables.opendocument
                  tests/tables.org
@@ -170,6 +172,7 @@ Extra-Source-Files:
                  tests/writer.latex
                  tests/writer.context
                  tests/writer.docbook
+                 tests/writer.docbook5
                  tests/writer.html
                  tests/writer.man
                  tests/writer.markdown
@@ -183,10 +186,14 @@ Extra-Source-Files:
                  tests/writer.rst
                  tests/writer.icml
                  tests/writer.rtf
+                 tests/writer.tei
                  tests/writer.texinfo
                  tests/writer.fb2
                  tests/writer.opml
                  tests/writer.dokuwiki
+                 tests/writer.zimwiki
+                 tests/writers-lang-and-dir.latex
+                 tests/writers-lang-and-dir.context
                  tests/dokuwiki_inline_formatting.dokuwiki
                  tests/lhs-test.markdown
                  tests/lhs-test.markdown+lhs
@@ -254,32 +261,57 @@ Library
                  directory >= 1 && < 1.3,
                  bytestring >= 0.9 && < 0.11,
                  text >= 0.11 && < 1.3,
-                 network-uri >= 2.6,
+                 zip-archive >= 0.2.3.4 && < 0.4,
+                 HTTP >= 4000.0.5 && < 4000.4,
+                 texmath >= 0.8.6.5 && < 0.9,
                  xml >= 1.3.12 && < 1.4,
                  random >= 1 && < 1.2,
                  extensible-exceptions >= 0.1 && < 0.2,
-                 pandoc-types >= 1.12.4 && < 1.17,
-                 aeson >= 0.7 && < 0.12,
-                 tagsoup >= 0.13.1 && < 0.15,
+                 pandoc-types >= 1.16 && < 1.17,
+                 aeson >= 0.7 && < 1.1,
+                 tagsoup >= 0.13.7 && < 0.15,
                  base64-bytestring >= 0.1 && < 1.1,
+                 zlib >= 0.5 && < 0.7,
+                 highlighting-kate >= 0.6.2 && < 0.7,
                  data-default >= 0.4 && < 0.8,
+                 temporary >= 1.1 && < 1.3,
                  blaze-html >= 0.5 && < 0.9,
                  blaze-markup >= 0.5.1 && < 0.8,
                  yaml >= 0.8.8.2 && < 0.9,
                  scientific >= 0.2 && < 0.4,
                  vector >= 0.10 && < 0.12,
+                 hslua >= 0.3 && < 0.5,
                  binary >= 0.5 && < 0.9,
                  SHA >= 1.6 && < 1.7,
+                 haddock-library >= 1.1 && < 1.5,
                  old-time,
-                 deepseq-generics >= 0.1 && < 0.3
-
+                 deepseq >= 1.3 && < 1.5,
+                 JuicyPixels >= 3.1.6.1 && < 3.3,
+                 filemanip >= 0.3 && < 0.4,
+                 cmark >= 0.5 && < 0.6,
+                 ghc-prim >= 0.2
   if flag(old-locale)
      Build-Depends: old-locale >= 1 && < 1.1,
                     time >= 1.2 && < 1.5
   else
      Build-Depends: time >= 1.5 && < 1.7
-  Ghc-Options:   -rtsopts -Wall -fno-warn-unused-do-bind
-  Ghc-Prof-Options: -fprof-auto-exported -rtsopts
+  if flag(network-uri)
+     Build-Depends: network-uri >= 2.6 && < 2.7, network >= 2.6
+  else
+     Build-Depends: network >= 2 && < 2.6
+  if flag(https)
+     Build-Depends: http-client >= 0.5 && < 0.6,
+                    http-client-tls >= 0.3 && < 0.4,
+                    http-types >= 0.8 && < 0.10
+     cpp-options:   -DHTTP_CLIENT
+  if flag(embed_data_files)
+     cpp-options:   -DEMBED_DATA_FILES
+     Build-Tools:   hsb2hs >= 0.3.1
+     other-modules: Text.Pandoc.Data
+  if os(windows)
+    Cpp-options:      -D_WINDOWS
+  Ghc-Options:   -Wall -fno-warn-unused-do-bind
+  Ghc-Prof-Options: -fprof-auto-exported
   Default-Language: Haskell98
   Other-Extensions:   PatternGuards, OverloadedStrings,
                       ScopedTypeVariables, GeneralizedNewtypeDeriving,
@@ -334,36 +366,45 @@ Library
                    Text.Pandoc.Writers.Textile,
                    Text.Pandoc.Writers.MediaWiki,
                    Text.Pandoc.Writers.DokuWiki,
-                   -- Text.Pandoc.Writers.RTF,
-                   -- Text.Pandoc.Writers.ODT,
-                   -- Text.Pandoc.Writers.Docx,
-                   -- Text.Pandoc.Writers.EPUB,
-                   -- Text.Pandoc.Writers.FB2,
-                   -- Text.Pandoc.PDF,
+                   Text.Pandoc.Writers.ZimWiki,
+                   Text.Pandoc.Writers.RTF,
+                   Text.Pandoc.Writers.ODT,
+                   Text.Pandoc.Writers.Docx,
+                   Text.Pandoc.Writers.EPUB,
+                   Text.Pandoc.Writers.FB2,
+                   Text.Pandoc.Writers.TEI,
+                   Text.Pandoc.PDF,
                    Text.Pandoc.UTF8,
                    Text.Pandoc.Templates,
                    Text.Pandoc.XML,
                    -- Text.Pandoc.SelfContained,
                    Text.Pandoc.Process,
                    Text.Pandoc.CSS
-  Other-Modules:
-                   -- Text.Pandoc.Readers.Docx.Lists,
-                   -- Text.Pandoc.Readers.Docx.Reducible,
-                   -- Text.Pandoc.Readers.Docx.Parse,
-                   -- Text.Pandoc.Readers.Docx.Fonts,
-                   -- Text.Pandoc.Readers.Docx.Util,
-                   -- Text.Pandoc.Readers.Docx.StyleMap,
-                   -- Text.Pandoc.Readers.Odt.Base,
-                   -- Text.Pandoc.Readers.Odt.Namespaces,
-                   -- Text.Pandoc.Readers.Odt.StyleReader,
-                   -- Text.Pandoc.Readers.Odt.ContentReader,
-                   -- Text.Pandoc.Readers.Odt.Generic.Fallible,
-                   -- Text.Pandoc.Readers.Odt.Generic.SetMap,
-                   -- Text.Pandoc.Readers.Odt.Generic.Utils,
-                   -- Text.Pandoc.Readers.Odt.Generic.Namespaces,
-                   -- Text.Pandoc.Readers.Odt.Generic.XMLConverter,
-                   -- Text.Pandoc.Readers.Odt.Arrows.State,
-                   -- Text.Pandoc.Readers.Odt.Arrows.Utils,
+  Other-Modules:   Text.Pandoc.Readers.Docx.Lists,
+                   Text.Pandoc.Readers.Docx.Combine,
+                   Text.Pandoc.Readers.Docx.Parse,
+                   Text.Pandoc.Readers.Docx.Fonts,
+                   Text.Pandoc.Readers.Docx.Util,
+                   Text.Pandoc.Readers.Docx.StyleMap,
+                   Text.Pandoc.Readers.Odt.Base,
+                   Text.Pandoc.Readers.Odt.Namespaces,
+                   Text.Pandoc.Readers.Odt.StyleReader,
+                   Text.Pandoc.Readers.Odt.ContentReader,
+                   Text.Pandoc.Readers.Odt.Generic.Fallible,
+                   Text.Pandoc.Readers.Odt.Generic.SetMap,
+                   Text.Pandoc.Readers.Odt.Generic.Utils,
+                   Text.Pandoc.Readers.Odt.Generic.Namespaces,
+                   Text.Pandoc.Readers.Odt.Generic.XMLConverter,
+                   Text.Pandoc.Readers.Odt.Arrows.State,
+                   Text.Pandoc.Readers.Odt.Arrows.Utils,
+                   Text.Pandoc.Readers.Org.BlockStarts,
+                   Text.Pandoc.Readers.Org.Blocks,
+                   Text.Pandoc.Readers.Org.ExportSettings,
+                   Text.Pandoc.Readers.Org.Inlines,
+                   Text.Pandoc.Readers.Org.Meta,
+                   Text.Pandoc.Readers.Org.ParserState,
+                   Text.Pandoc.Readers.Org.Parsing,
+                   Text.Pandoc.Readers.Org.Shared,
                    Text.Pandoc.Writers.Shared,
                    Text.Pandoc.Asciify,
                    Text.Pandoc.MIME,

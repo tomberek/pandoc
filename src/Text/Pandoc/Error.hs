@@ -1,6 +1,6 @@
 {-# LANGUAGE DeriveDataTypeable, DeriveGeneric #-}
 {-
-Copyright (C) 2006-2015 John MacFarlane <jgm@berkeley.edu>
+Copyright (C) 2006-2016 John MacFarlane <jgm@berkeley.edu>
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -18,7 +18,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 -}
 {- |
    Module      : Text.Pandoc.Error
-   Copyright   : Copyright (C) 2006-2015 John MacFarlane
+   Copyright   : Copyright (C) 2006-2016 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -62,8 +62,12 @@ handleError (Left err) =
         let errPos = errorPos err'
             errLine = sourceLine errPos
             errColumn = sourceColumn errPos
-            theline = (lines input ++ [""]) !! (errLine - 1)
-        in  error $ "\nError at " ++ show  err' ++ "\n" ++
-                theline ++ "\n" ++ replicate (errColumn - 1) ' ' ++
-                "^"
+            ls = lines input ++ [""]
+            errorInFile = if length ls > errLine - 1
+                            then concat ["\n", (ls !! (errLine - 1))
+                                        ,"\n", replicate (errColumn - 1) ' '
+                                        ,"^"]
+                        else ""
+        in  error $ "\nError at " ++ show  err'
+                ++ errorInFile
 

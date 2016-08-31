@@ -43,10 +43,12 @@ import Text.Pandoc.Definition
 import Text.Pandoc.Options ( WriterOptions(
                                 writerTableOfContents
                               , writerStandalone
-                              , writerTemplate) )
+                              , writerTemplate
+                              , writerWrapText), WrapOption(..) )
 import Text.Pandoc.Shared ( escapeURI, removeFormatting, camelCaseToHyphenated
                           , trimr, normalize, substitute  )
 import Text.Pandoc.Writers.Shared ( defField, metaToJSON )
+import Text.Pandoc.ImageSize
 import Text.Pandoc.Templates ( renderTemplate' )
 import Data.List ( intersect, intercalate, isPrefixOf, transpose )
 import Data.Default (Default(..))
@@ -126,7 +128,7 @@ blockToDokuWiki opts (Plain inlines) =
 
 -- title beginning with fig: indicates that the image is a figure
 -- dokuwiki doesn't support captions - so combine together alt and caption into alt
-blockToDokuWiki opts (Para [Image txt (src,'f':'i':'g':':':tit)]) = do
+blockToDokuWiki opts (Para [Image attr txt (src,'f':'i':'g':':':tit)]) = do
   capt <- if null txt
              then return ""
              else (" " ++) `fmap` inlineListToDokuWiki opts txt
@@ -135,7 +137,7 @@ blockToDokuWiki opts (Para [Image txt (src,'f':'i':'g':':':tit)]) = do
                else "|" ++ if null tit then capt else tit ++ capt
       -- Relative links fail isURI and receive a colon
       prefix = if isURI src then "" else ":"
-  return $ "{{" ++ prefix ++ src ++ opt ++ "}}\n"
+  return $ "{{" ++ prefix ++ src ++ imageDims opts attr ++ opt ++ "}}\n"
 
 blockToDokuWiki opts (Para inlines) = do
   indent <- stIndent <$> ask
@@ -450,8 +452,11 @@ inlineToDokuWiki _ (Code _ str) =
 
 inlineToDokuWiki _ (Str str) = return $ escapeString str
 
-inlineToDokuWiki _ (Math _ str) = return $ "$" ++ str ++ "$"
+inlineToDokuWiki _ (Math mathType str) = return $ delim ++ str ++ delim
                                  -- note:  str should NOT be escaped
+  where delim = case mathType of
+                     DisplayMath -> "$$"
+                     InlineMath  -> "$"
 
 inlineToDokuWiki _ (RawInline f str)
   | f == Format "dokuwiki" = return str
@@ -460,20 +465,26 @@ inlineToDokuWiki _ (RawInline f str)
 
 inlineToDokuWiki _ (LineBreak) = return "\\\\\n"
 
+inlineToDokuWiki opts SoftBreak =
+  case writerWrapText opts of
+       WrapNone     -> return " "
+       WrapAuto     -> return " "
+       WrapPreserve -> return "\n"
+
 inlineToDokuWiki _ Space = return " "
 
-inlineToDokuWiki opts (Link txt (src, _)) = do
+inlineToDokuWiki opts (Link _ txt (src, _)) = do
   label <- inlineListToDokuWiki opts txt
   case txt of
      [Str s] | "mailto:" `isPrefixOf` src -> return $ "<" ++ s ++ ">"
              | escapeURI s == src -> return src
      _  -> if isURI src
-              then return $ "[[" ++ src ++ "|" ++ label ++ "]]"
+              then return $ "[[" ++ src  ++ "|" ++ label ++ "]]"
               else return $ "[[" ++ src' ++ "|" ++ label ++ "]]"
                      where src' = case src of
                                      '/':xs -> xs  -- with leading / it's a
                                      _      -> src -- link to a help page
-inlineToDokuWiki opts (Image alt (source, tit)) = do
+inlineToDokuWiki opts (Image attr alt (source, tit)) = do
   alt' <- inlineListToDokuWiki opts alt
   let txt = case (tit, alt) of
               ("", []) -> ""
@@ -481,10 +492,21 @@ inlineToDokuWiki opts (Image alt (source, tit)) = do
               (_ , _ ) -> "|" ++ tit
       -- Relative links fail isURI and receive a colon
       prefix = if isURI source then "" else ":"
-  return $ "{{" ++ prefix ++ source ++ txt ++ "}}"
+  return $ "{{" ++ prefix ++ source ++ imageDims opts attr ++ txt ++ "}}"
 
 inlineToDokuWiki opts (Note contents) = do
   contents' <- blockListToDokuWiki opts contents
   modify (\s -> s { stNotes = True })
   return $ "((" ++ contents' ++ "))"
   -- note - may not work for notes with multiple blocks
+
+imageDims :: WriterOptions -> Attr -> String
+imageDims opts attr = go (toPx $ dimension Width attr) (toPx $ dimension Height attr)
+  where
+    toPx = fmap (showInPixel opts) . checkPct
+    checkPct (Just (Percent _)) = Nothing
+    checkPct maybeDim = maybeDim
+    go (Just w) Nothing  = "?" ++ w
+    go (Just w) (Just h) = "?" ++ w ++ "x" ++ h
+    go Nothing  (Just h) = "?0x" ++ h
+    go Nothing  Nothing  = ""

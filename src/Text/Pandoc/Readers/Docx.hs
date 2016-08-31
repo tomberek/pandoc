@@ -1,7 +1,7 @@
-{-# LANGUAGE PatternGuards, OverloadedStrings #-}
+{-# LANGUAGE PatternGuards, OverloadedStrings, CPP #-}
 
 {-
-Copyright (C) 2014 Jesse Rosenthal <jrosenthal@jhu.edu>
+Copyright (C) 2014-2016 Jesse Rosenthal <jrosenthal@jhu.edu>
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -20,7 +20,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
 {- |
    Module      : Text.Pandoc.Readers.Docx
-   Copyright   : Copyright (C) 2014 Jesse Rosenthal
+   Copyright   : Copyright (C) 2014-2016 Jesse Rosenthal
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Jesse Rosenthal <jrosenthal@jhu.edu>
@@ -50,8 +50,7 @@ implemented, [-] means partially implemented):
 * Inlines
 
   - [X] Str
-  - [X] Emph (From italics. `underline` currently read as span. In
-        future, it might optionally be emph as well)
+  - [X] Emph (italics and underline both read as Emph)
   - [X] Strong
   - [X] Strikeout
   - [X] Superscript
@@ -62,16 +61,16 @@ implemented, [-] means partially implemented):
   - [X] Code (styled with `VerbatimChar`)
   - [X] Space
   - [X] LineBreak (these are invisible in Word: entered with Shift-Return)
-  - [ ] Math
+  - [X] Math
   - [X] Link (links to an arbitrary bookmark create a span with the target as
         id and "anchor" class)
-  - [-] Image (Links to path in archive. Future option for
-        data-encoded URI likely.)
+  - [X] Image 
   - [X] Note (Footnotes and Endnotes are silently combined.)
 -}
 
 module Text.Pandoc.Readers.Docx
-       ( readDocx
+       ( readDocxWithWarnings
+       , readDocx
        ) where
 
 import Codec.Archive.Zip
@@ -81,40 +80,55 @@ import Text.Pandoc.Builder
 import Text.Pandoc.Walk
 import Text.Pandoc.Readers.Docx.Parse
 import Text.Pandoc.Readers.Docx.Lists
-import Text.Pandoc.Readers.Docx.Reducible
+import Text.Pandoc.Readers.Docx.Combine
 import Text.Pandoc.Shared
 import Text.Pandoc.MediaBag (insertMedia, MediaBag)
-import Data.List (delete, (\\), intersect)
+import Data.List (delete, intersect)
 import Text.TeXMath (writeTeX)
 import Data.Default (Default)
 import qualified Data.ByteString.Lazy as B
 import qualified Data.Map as M
+import qualified Data.Set as Set
 import Control.Monad.Reader
 import Control.Monad.State
 import Data.Sequence (ViewL(..), viewl)
 import qualified Data.Sequence as Seq (null)
+#if !(MIN_VERSION_base(4,8,0))
+import Data.Traversable (traverse)
+#endif
 
 import Text.Pandoc.Error
 import Text.Pandoc.Compat.Except
 
+readDocxWithWarnings :: ReaderOptions
+                     -> B.ByteString
+                     -> Either PandocError (Pandoc, MediaBag, [String])
+readDocxWithWarnings opts bytes
+  | Right archive <- toArchiveOrFail bytes
+  , Right (docx, parserWarnings) <- archiveToDocxWithWarnings archive = do
+      (meta, blks, mediaBag, warnings) <- docxToOutput opts docx
+      return (Pandoc meta blks, mediaBag, parserWarnings ++ warnings)
+readDocxWithWarnings _ _ =
+  Left (ParseFailure "couldn't parse docx file")
+
 readDocx :: ReaderOptions
          -> B.ByteString
          -> Either PandocError (Pandoc, MediaBag)
-readDocx opts bytes =
-  case archiveToDocx (toArchive bytes) of
-    Right docx -> (\(meta, blks, mediaBag) -> (Pandoc meta blks, mediaBag))
-                    <$> (docxToOutput opts docx)
-    Left _   -> Left (ParseFailure "couldn't parse docx file")
+readDocx opts bytes = do
+  (pandoc, mediaBag, _) <- readDocxWithWarnings opts bytes
+  return (pandoc, mediaBag)
 
 data DState = DState { docxAnchorMap :: M.Map String String
                      , docxMediaBag      :: MediaBag
                      , docxDropCap       :: Inlines
+                     , docxWarnings      :: [String]
                      }
 
 instance Default DState where
   def = DState { docxAnchorMap = M.empty
                , docxMediaBag  = mempty
                , docxDropCap   = mempty
+               , docxWarnings  = []
                }
 
 data DEnv = DEnv { docxOptions  :: ReaderOptions
@@ -127,6 +141,11 @@ type DocxContext = ExceptT PandocError (ReaderT DEnv (State DState))
 
 evalDocxContext :: DocxContext a -> DEnv -> DState -> Either PandocError a
 evalDocxContext ctx env st = flip evalState st . flip runReaderT env . runExceptT $ ctx
+
+addDocxWarning :: String -> DocxContext ()
+addDocxWarning msg = do
+  warnings <- gets docxWarnings
+  modify $ \s -> s {docxWarnings = msg : warnings}
 
 -- This is empty, but we put it in for future-proofing.
 spansToKeep :: [String]
@@ -166,7 +185,7 @@ bodyPartsToMeta' (bp : bps)
   | (Paragraph pPr parParts) <- bp
   , (c : _)<- intersect (pStyle pPr) (M.keys metaStyles)
   , (Just metaField) <- M.lookup c metaStyles = do
-    inlines <- concatReduce <$> mapM parPartToInlines parParts
+    inlines <- smushInlines <$> mapM parPartToInlines parParts
     remaining <- bodyPartsToMeta' bps
     let
       f (MetaInlines ils) (MetaInlines ils') = MetaBlocks [Para ils, Para ils']
@@ -290,39 +309,73 @@ runToInlines (Run rs runElems)
      Just SubScrpt -> subscript codeString
      _             -> codeString
   | otherwise = do
-    let ils = concatReduce (map runElemToInlines runElems)
+    let ils = smushInlines (map runElemToInlines runElems)
     return $ (runStyleToTransform $ resolveDependentRunStyle rs) ils
 runToInlines (Footnote bps) = do
-  blksList <- concatReduce <$> (mapM bodyPartToBlocks bps)
+  blksList <- smushBlocks <$> (mapM bodyPartToBlocks bps)
   return $ note blksList
 runToInlines (Endnote bps) = do
-  blksList <- concatReduce <$> (mapM bodyPartToBlocks bps)
+  blksList <- smushBlocks <$> (mapM bodyPartToBlocks bps)
   return $ note blksList
-runToInlines (InlineDrawing fp bs) = do
+runToInlines (InlineDrawing fp bs ext) = do
   mediaBag <- gets docxMediaBag
   modify $ \s -> s { docxMediaBag = insertMedia fp Nothing bs mediaBag }
-  return $ image fp "" ""
+  return $ imageWith (extentToAttr ext) fp "" ""
+
+extentToAttr :: Extent -> Attr
+extentToAttr (Just (w, h)) =
+  ("", [], [("width", showDim w), ("height", showDim h)] )
+  where
+    showDim d = show (d / 914400) ++ "in"
+extentToAttr _ = nullAttr
+
+blocksToInlinesWarn :: String -> Blocks -> DocxContext Inlines
+blocksToInlinesWarn cmtId blks = do
+  let blkList = toList blks
+      notParaOrPlain :: Block -> Bool
+      notParaOrPlain (Para _) = False
+      notParaOrPlain (Plain _) = False
+      notParaOrPlain _ = True
+  when (not $ null $ filter notParaOrPlain blkList)
+    (addDocxWarning $ "Docx comment " ++ cmtId ++ " will not retain formatting")
+  return $ fromList $ blocksToInlines blkList
 
 parPartToInlines :: ParPart -> DocxContext Inlines
 parPartToInlines (PlainRun r) = runToInlines r
 parPartToInlines (Insertion _ author date runs) = do
   opts <- asks docxOptions
   case readerTrackChanges opts of
-    AcceptChanges -> concatReduce <$> mapM runToInlines runs
+    AcceptChanges -> smushInlines <$> mapM runToInlines runs
     RejectChanges -> return mempty
     AllChanges    -> do
-      ils <- concatReduce <$> mapM runToInlines runs
+      ils <- smushInlines <$> mapM runToInlines runs
       let attr = ("", ["insertion"], [("author", author), ("date", date)])
       return $ spanWith attr ils
 parPartToInlines (Deletion _ author date runs) = do
   opts <- asks docxOptions
   case readerTrackChanges opts of
     AcceptChanges -> return mempty
-    RejectChanges -> concatReduce <$> mapM runToInlines runs
+    RejectChanges -> smushInlines <$> mapM runToInlines runs
     AllChanges    -> do
-      ils <- concatReduce <$> mapM runToInlines runs
+      ils <- smushInlines <$> mapM runToInlines runs
       let attr = ("", ["deletion"], [("author", author), ("date", date)])
       return $ spanWith attr ils
+parPartToInlines (CommentStart cmtId author date bodyParts) = do
+  opts <- asks docxOptions
+  case readerTrackChanges opts of
+    AllChanges -> do
+      blks <- smushBlocks <$> mapM bodyPartToBlocks bodyParts
+      ils <- blocksToInlinesWarn cmtId blks
+      let attr = ("", ["comment-start"], [("id", cmtId), ("author", author), ("date", date)])
+      return $ spanWith attr ils
+    _ -> return mempty
+parPartToInlines (CommentEnd cmtId) = do
+  opts <- asks docxOptions
+  case readerTrackChanges opts of
+    AllChanges -> do
+      let attr = ("", ["comment-end"], [("id", cmtId)])
+      return $ spanWith attr mempty
+    _ -> return mempty
 parPartToInlines (BookMark _ anchor) | anchor `elem` dummyAnchors =
   return mempty
 parPartToInlines (BookMark _ anchor) =
@@ -343,58 +396,58 @@ parPartToInlines (BookMark _ anchor) =
     -- avoid an extra pass.
     let newAnchor =
           if not inHdrBool && anchor `elem` (M.elems anchorMap)
-          then uniqueIdent [Str anchor] (M.elems anchorMap)
+          then uniqueIdent [Str anchor] (Set.fromList $ M.elems anchorMap)
           else anchor
     unless inHdrBool
       (modify $ \s -> s { docxAnchorMap = M.insert anchor newAnchor anchorMap})
     return $ spanWith (newAnchor, ["anchor"], []) mempty
-parPartToInlines (Drawing fp bs) = do
+parPartToInlines (Drawing fp bs ext) = do
   mediaBag <- gets docxMediaBag
   modify $ \s -> s { docxMediaBag = insertMedia fp Nothing bs mediaBag }
-  return $ image fp "" ""
+  return $ imageWith (extentToAttr ext) fp "" ""
 parPartToInlines (InternalHyperLink anchor runs) = do
-  ils <- concatReduce <$> mapM runToInlines runs
+  ils <- smushInlines <$> mapM runToInlines runs
   return $ link ('#' : anchor) "" ils
 parPartToInlines (ExternalHyperLink target runs) = do
-  ils <- concatReduce <$> mapM runToInlines runs
+  ils <- smushInlines <$> mapM runToInlines runs
   return $ link target "" ils
 parPartToInlines (PlainOMath exps) = do
   return $ math $ writeTeX exps
 
 isAnchorSpan :: Inline -> Bool
-isAnchorSpan (Span (_, classes, kvs) ils) =
+isAnchorSpan (Span (_, classes, kvs) _) =
   classes == ["anchor"] &&
-  null kvs &&
-  null ils
+  null kvs
 isAnchorSpan _ = False
 
 dummyAnchors :: [String]
 dummyAnchors = ["_GoBack"]
 
 makeHeaderAnchor :: Blocks -> DocxContext Blocks
-makeHeaderAnchor bs = case viewl $ unMany bs of
-  (x :< xs) -> do
-    x' <- (makeHeaderAnchor' x)
-    xs' <- (makeHeaderAnchor $ Many xs)
-    return $ (singleton x') <> xs'
-  EmptyL    -> return mempty
+makeHeaderAnchor bs = traverse makeHeaderAnchor' bs
 
 makeHeaderAnchor' :: Block -> DocxContext Block
 -- If there is an anchor already there (an anchor span in the header,
 -- to be exact), we rename and associate the new id with the old one.
-makeHeaderAnchor' (Header n (_, classes, kvs) ils)
-  | (c:cs) <- filter isAnchorSpan ils
-  , (Span (ident, ["anchor"], _) _) <- c = do
+makeHeaderAnchor' (Header n (ident, classes, kvs) ils)
+  | (c:_) <- filter isAnchorSpan ils
+  , (Span (anchIdent, ["anchor"], _) cIls) <- c = do
     hdrIDMap <- gets docxAnchorMap
-    let newIdent = uniqueIdent ils (M.elems hdrIDMap)
-    modify $ \s -> s {docxAnchorMap = M.insert ident newIdent hdrIDMap}
-    return $ Header n (newIdent, classes, kvs) (ils \\ (c:cs))
+    let newIdent = if null ident
+                   then uniqueIdent ils (Set.fromList $ M.elems hdrIDMap)
+                   else ident
+        newIls = concatMap f ils where f il | il == c   = cIls
+                                            | otherwise = [il]
+    modify $ \s -> s {docxAnchorMap = M.insert anchIdent newIdent hdrIDMap}
+    makeHeaderAnchor' $ Header n (newIdent, classes, kvs) newIls
 -- Otherwise we just give it a name, and register that name (associate
 -- it with itself.)
-makeHeaderAnchor' (Header n (_, classes, kvs) ils) =
+makeHeaderAnchor' (Header n (ident, classes, kvs) ils) =
   do
     hdrIDMap <- gets docxAnchorMap
-    let newIdent = uniqueIdent ils (M.elems hdrIDMap)
+    let newIdent = if null ident
+                   then uniqueIdent ils (Set.fromList $ M.elems hdrIDMap)
+                   else ident
     modify $ \s -> s {docxAnchorMap = M.insert newIdent newIdent hdrIDMap}
     return $ Header n (newIdent, classes, kvs) ils
 makeHeaderAnchor' blk = return blk
@@ -409,7 +462,7 @@ singleParaToPlain blks = blks
 
 cellToBlocks :: Cell -> DocxContext Blocks
 cellToBlocks (Cell bps) = do
-  blks <- concatReduce <$> mapM bodyPartToBlocks bps
+  blks <- smushBlocks <$> mapM bodyPartToBlocks bps
   return $ fromList $ blocksToDefinitions $ blocksToBullets $ toList blks
 
 rowToBlocksList :: Row -> DocxContext [Blocks]
@@ -471,11 +524,11 @@ bodyPartToBlocks (Paragraph pPr parparts)
     $ concatMap parPartToString parparts
   | Just (style, n) <- pHeading pPr = do
     ils <- local (\s-> s{docxInHeaderBlock=True}) $
-           (concatReduce <$> mapM parPartToInlines parparts)
+           (smushInlines <$> mapM parPartToInlines parparts)
     makeHeaderAnchor $
       headerWith ("", delete style (pStyle pPr), []) n ils
   | otherwise = do
-    ils <- concatReduce <$> mapM parPartToInlines parparts >>=
+    ils <- smushInlines <$> mapM parPartToInlines parparts >>=
            (return . fromList . trimLineBreaks . normalizeSpaces . toList)
     dropIls <- gets docxDropCap
     let ils' = dropIls <> ils
@@ -486,7 +539,7 @@ bodyPartToBlocks (Paragraph pPr parparts)
               return $ case isNull ils' of
                 True -> mempty
                 _ -> parStyleToTransform pPr $ para ils'
-bodyPartToBlocks (ListItem pPr numId lvl levelInfo parparts) = do
+bodyPartToBlocks (ListItem pPr numId lvl (Just levelInfo) parparts) = do
   let
     kvs = case levelInfo of
       (_, fmt, txt, Just start) -> [ ("level", lvl)
@@ -503,6 +556,10 @@ bodyPartToBlocks (ListItem pPr numId lvl levelInfo parparts) = do
                                    ]
   blks <- bodyPartToBlocks (Paragraph pPr parparts)
   return $ divWith ("", ["list-item"], kvs) blks
+bodyPartToBlocks (ListItem pPr _ _ _ parparts) = 
+  let pPr' = pPr {pStyle = "ListParagraph": (pStyle pPr)}
+  in
+    bodyPartToBlocks $ Paragraph pPr' parparts
 bodyPartToBlocks (Tbl _ _ _ []) =
   return $ para mempty
 bodyPartToBlocks (Tbl cap _ look (r:rs)) = do
@@ -535,28 +592,30 @@ bodyPartToBlocks (OMathPara e) = do
 
 -- replace targets with generated anchors.
 rewriteLink' :: Inline -> DocxContext Inline
-rewriteLink' l@(Link ils ('#':target, title)) = do
+rewriteLink' l@(Link attr ils ('#':target, title)) = do
   anchorMap <- gets docxAnchorMap
   return $ case M.lookup target anchorMap of
-    Just newTarget -> (Link ils ('#':newTarget, title))
+    Just newTarget -> (Link attr ils ('#':newTarget, title))
     Nothing        -> l
 rewriteLink' il = return il
 
 rewriteLinks :: [Block] -> DocxContext [Block]
 rewriteLinks = mapM (walkM rewriteLink')
 
-bodyToOutput :: Body -> DocxContext (Meta, [Block], MediaBag)
+bodyToOutput :: Body -> DocxContext (Meta, [Block], MediaBag, [String])
 bodyToOutput (Body bps) = do
   let (metabps, blkbps) = sepBodyParts bps
   meta <- bodyPartsToMeta metabps
-  blks <- concatReduce <$> mapM bodyPartToBlocks blkbps
+  blks <- smushBlocks <$> mapM bodyPartToBlocks blkbps
   blks' <- rewriteLinks $ blocksToDefinitions $ blocksToBullets $ toList blks
   mediaBag <- gets docxMediaBag
+  warnings <- gets docxWarnings
   return $ (meta,
             blks',
-            mediaBag)
+            mediaBag,
+            warnings)
 
-docxToOutput :: ReaderOptions -> Docx -> Either PandocError (Meta, [Block], MediaBag)
+docxToOutput :: ReaderOptions -> Docx -> Either PandocError (Meta, [Block], MediaBag, [String])
 docxToOutput opts (Docx (Document _ body)) =
   let dEnv   = def { docxOptions  = opts} in
    evalDocxContext (bodyToOutput body) dEnv def

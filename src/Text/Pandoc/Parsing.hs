@@ -5,7 +5,7 @@
 , MultiParamTypeClasses
 , FlexibleInstances #-}
 {-
-Copyright (C) 2006-2015 John MacFarlane <jgm@berkeley.edu>
+Copyright (C) 2006-2016 John MacFarlane <jgm@berkeley.edu>
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -24,7 +24,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
 {- |
    Module      : Text.Pandoc.Parsing
-   Copyright   : Copyright (C) 2006-2015 John MacFarlane
+   Copyright   : Copyright (C) 2006-2016 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -159,7 +159,8 @@ module Text.Pandoc.Parsing ( anyLine,
                              setSourceLine,
                              newPos,
                              addWarning,
-                             (<+?>)
+                             (<+?>),
+                             extractIdClass
                              )
 where
 
@@ -506,7 +507,11 @@ characterReference :: Stream s m Char => ParserT s st m Char
 characterReference = try $ do
   char '&'
   ent <- many1Till nonspaceChar (char ';')
-  case lookupEntity ent of
+  let ent' = case ent of
+                  '#':'X':xs -> '#':'x':xs  -- workaround tagsoup bug
+                  '#':_  -> ent
+                  _      -> ent ++ ";"
+  case lookupEntity ent' of
        Just c  -> return c
        Nothing -> fail "entity not found"
 
@@ -794,13 +799,13 @@ gridTableFooter = blanklines
 ---
 
 -- | Removes the ParsecT layer from the monad transformer stack
-readWithM :: (Monad m, Functor m)
+readWithM :: (Monad m)
           => ParserT [Char] st m a       -- ^ parser
           -> st                       -- ^ initial state
           -> String                   -- ^ input
           -> m (Either PandocError a)
 readWithM parser state input =
-    mapLeft (ParsecError input) <$> runParserT parser state "source" input
+    mapLeft (ParsecError input) `liftM` runParserT parser state "source" input
 
 
 -- | Parse a string with a given parser and state
@@ -820,7 +825,7 @@ readWithWarnings p = readWith $ do
          return (doc, warnings)
 
 -- | Parse a string with @parser@ (for testing).
-testStringWith :: (Show a, Stream [Char] Identity Char)
+testStringWith :: (Show a)
                => ParserT [Char] ParserState Identity a
                -> [Char]
                -> IO ()
@@ -844,7 +849,7 @@ data ParserState = ParserState
       stateMeta'           :: F Meta,        -- ^ Document metadata
       stateHeaderTable     :: [HeaderType],  -- ^ Ordered list of header types used
       stateHeaders         :: M.Map Inlines String, -- ^ List of headers and ids (used for implicit ref links)
-      stateIdentifiers     :: [String],      -- ^ List of header identifiers used
+      stateIdentifiers     :: Set.Set String, -- ^ Header identifiers used
       stateNextExample     :: Int,           -- ^ Number of next example
       stateExamples        :: M.Map String Int, -- ^ Map from example labels to numbers
       stateHasChapters     :: Bool,          -- ^ True if \chapter encountered
@@ -901,8 +906,8 @@ instance HasHeaderMap ParserState where
   updateHeaderMap f st = st{ stateHeaders = f $ stateHeaders st }
 
 class HasIdentifierList st where
-  extractIdentifierList  :: st -> [String]
-  updateIdentifierList   :: ([String] -> [String]) -> st -> st
+  extractIdentifierList  :: st -> Set.Set String
+  updateIdentifierList   :: (Set.Set String -> Set.Set String) -> st -> st
 
 instance HasIdentifierList ParserState where
   extractIdentifierList     = stateIdentifiers
@@ -934,7 +939,7 @@ defaultParserState =
                   stateMeta'           = return nullMeta,
                   stateHeaderTable     = [],
                   stateHeaders         = M.empty,
-                  stateIdentifiers     = [],
+                  stateIdentifiers     = Set.empty,
                   stateNextExample     = 1,
                   stateExamples        = M.empty,
                   stateHasChapters     = False,
@@ -991,7 +996,7 @@ toKey = Key . map toLower . unwords . words . unbracket
   where unbracket ('[':xs) | "]" `isSuffixOf` xs = take (length xs - 1) xs
         unbracket xs       = xs
 
-type KeyTable = M.Map Key Target
+type KeyTable = M.Map Key (Target, Attr)
 
 type SubstTable = M.Map Key Inlines
 
@@ -1012,8 +1017,8 @@ registerHeader (ident,classes,kvs) header' = do
        let id'' = if Ext_ascii_identifiers `Set.member` exts
                      then catMaybes $ map toAsciiChar id'
                      else id'
-       updateState $ updateIdentifierList $
-         if id' == id'' then (id' :) else ([id', id''] ++)
+       updateState $ updateIdentifierList $ Set.insert id'
+       updateState $ updateIdentifierList $ Set.insert id''
        updateState $ updateHeaderMap $ insert' header' id'
        return (id'',classes,kvs)
      else do
@@ -1137,7 +1142,7 @@ citeKey = try $ do
   let regchar = satisfy (\c -> isAlphaNum c || c == '_')
   let internal p = try $ p <* lookAhead regchar
   rest <- many $ regchar <|> internal (oneOf ":.#$%&-+?<>~/") <|>
-                 (oneOf ":/" <* lookAhead (char '/'))
+                 try (oneOf ":/" <* lookAhead (char '/'))
   let key = firstChar:rest
   return (suppress_author, key)
 
@@ -1160,5 +1165,16 @@ addWarning mbpos msg =
     stateWarnings = (msg ++ maybe "" (\pos -> " " ++ show pos) mbpos) :
                      stateWarnings st }
 infixr 5 <+?>
-(<+?>) :: (Monoid a, Monad m) => ParserT s st m a -> ParserT s st m a -> ParserT s st m a
+(<+?>) :: (Monoid a) => ParserT s st m a -> ParserT s st m a -> ParserT s st m a
 a <+?> b = a >>= flip fmap (try b <|> return mempty) . (<>)
+
+extractIdClass :: Attr -> Attr
+extractIdClass (ident, cls, kvs) = (ident', cls', kvs')
+  where
+    ident' = case (lookup "id" kvs) of
+               Just v  -> v
+               Nothing -> ident
+    cls'   = case (lookup "class" kvs) of
+               Just cl -> words cl
+               Nothing -> cls
+    kvs'  = filter (\(k,_) -> k /= "id" || k /= "class") kvs

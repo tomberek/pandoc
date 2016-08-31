@@ -7,10 +7,10 @@ import Text.Pandoc
 import Tests.Helpers
 import Tests.Arbitrary()
 
-latex :: (ToString a, ToPandoc a) => a -> String
+latex :: (ToPandoc a) => a -> String
 latex = writeLaTeX def{ writerHighlight = True } . toPandoc
 
-latexListing :: (ToString a, ToPandoc a) => a -> String
+latexListing :: (ToPandoc a) => a -> String
 latexListing = writeLaTeX def{ writerListings = True } . toPandoc
 
 {-
@@ -42,7 +42,7 @@ tests = [ testGroup "code blocks"
         , testGroup "definition lists"
           [ "with internal link" =: definitionList [(link "#go" "" (str "testing"),
              [plain (text "hi there")])] =?>
-            "\\begin{description}\n\\tightlist\n\\item[\\protect\\hyperlink{go}{testing}]\nhi there\n\\end{description}"
+            "\\begin{description}\n\\tightlist\n\\item[{\\protect\\hyperlink{go}{testing}}]\nhi there\n\\end{description}"
           ]
         , testGroup "math"
           [ "escape |" =: para (math "\\sigma|_{\\{x\\}}") =?>

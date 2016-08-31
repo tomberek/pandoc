@@ -7,8 +7,8 @@ import Text.Pandoc
 import Tests.Helpers
 import Tests.Arbitrary()
 
-docbook :: (ToString a, ToPandoc a) => a -> String
-docbook = writeDocbook def{ writerWrapText = False } . toPandoc
+docbook :: (ToPandoc a) => a -> String
+docbook = writeDocbook def{ writerWrapText = WrapNone } . toPandoc
 
 {-
   "my test" =: X =?> Y

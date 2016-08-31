@@ -1,5 +1,5 @@
 {-
-Copyright (C) 2006-2015 John MacFarlane <jgm@berkeley.edu>
+Copyright (C) 2006-2016 John MacFarlane <jgm@berkeley.edu>
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -18,7 +18,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
 {- |
    Module      : Text.Pandoc.XML
-   Copyright   : Copyright (C) 2006-2015 John MacFarlane
+   Copyright   : Copyright (C) 2006-2016 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -100,11 +100,16 @@ toEntities (c:cs)
 -- Unescapes XML entities
 fromEntities :: String -> String
 fromEntities ('&':xs) =
-  case lookupEntity ent of
+  case lookupEntity ent' of
         Just c  -> c : fromEntities rest
         Nothing -> '&' : fromEntities xs
     where (ent, rest) = case break (\c -> isSpace c || c == ';') xs of
                              (zs,';':ys) -> (zs,ys)
-                             _           -> ("",xs)
+                             (zs,    ys) -> (zs,ys)
+          ent' = case ent of
+                      '#':'X':ys -> '#':'x':ys  -- workaround tagsoup bug
+                      '#':_ -> ent
+                      _     -> ent ++ ";"
+
 fromEntities (x:xs) = x : fromEntities xs
 fromEntities [] = []

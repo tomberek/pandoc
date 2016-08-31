@@ -109,10 +109,9 @@ tests =
                   , "seven*eight* nine*"
                   , "+not+funny+"
                   ] =?>
-          para (spcSep [ "this+that+", "+so+on"
-                       , "seven*eight*", "nine*"
-                       , strikeout "not+funny"
-                       ])
+          para ("this+that+ +so+on" <> softbreak <>
+                "seven*eight* nine*" <> softbreak <>
+                strikeout "not+funny")
 
       , "No empty markup" =:
           "// ** __ ++ == ~~ $$" =?>
@@ -142,8 +141,9 @@ tests =
 
       , "Inline math must stay within three lines" =:
           unlines [ "$a", "b", "c$", "$d", "e", "f", "g$" ] =?>
-          para ((math "a\nb\nc") <> space <>
-                spcSep [ "$d", "e", "f", "g$" ])
+          para ((math "a\nb\nc") <> softbreak <>
+                "$d" <> softbreak <> "e" <> softbreak <>
+                "f" <> softbreak <> "g$")
 
       , "Single-character math" =:
           "$a$ $b$! $c$?" =?>
@@ -153,14 +153,13 @@ tests =
                        ])
 
       , "Markup may not span more than two lines" =:
-          unlines [ "/this *is +totally", "nice+ not*", "emph/" ] =?>
-          para (spcSep [ "/this"
-                       , (strong (spcSep
-                                  [ "is"
-                                  , (strikeout ("totally" <> space <> "nice"))
-                                  , "not"
-                                  ]))
-                       , "emph/" ])
+          "/this *is +totally\nnice+ not*\nemph/" =?>
+          para ("/this" <> space <>
+                  strong ("is" <> space <>
+                          strikeout ("totally" <>
+                            softbreak <> "nice") <>
+                          space <> "not") <>
+                  softbreak <> "emph/")
 
       , "Sub- and superscript expressions" =:
          unlines [ "a_(a(b)(c)d)"
@@ -174,7 +173,8 @@ tests =
                  , "3_{{}}"
                  , "4^(a(*b(c*)d))"
                  ] =?>
-         para (spcSep [ "a" <> subscript "(a(b)(c)d)"
+         para (mconcat $ intersperse softbreak
+                      [ "a" <> subscript "(a(b)(c)d)"
                       , "e" <> superscript "(f(g)h)"
                       , "i" <> (subscript "(jk)") <> "l)"
                       , "m" <> (superscript "()") <> "n"
@@ -185,10 +185,17 @@ tests =
                       , "3" <> subscript "{}"
                       , "4" <> superscript ("(a(" <> strong "b(c" <> ")d))")
                       ])
+      , "Verbatim text can contain equal signes (=)" =:
+          "=is_subst = True=" =?>
+          para (code "is_subst = True")
 
       , "Image" =:
           "[[./sunset.jpg]]" =?>
           (para $ image "./sunset.jpg" "" "")
+
+      , "Image with explicit file: prefix" =:
+          "[[file:sunrise.jpg]]" =?>
+          (para $ image "sunrise.jpg" "" "")
 
       , "Explicit link" =:
           "[[http://zeitlens.com/][pseudo-random /nonsense/]]" =?>
@@ -212,12 +219,12 @@ tests =
           (para $ link "" "" "New Link")
 
       , "Image link" =:
-          "[[sunset.png][dusk.svg]]" =?>
+          "[[sunset.png][file:dusk.svg]]" =?>
           (para $ link "sunset.png" "" (image "dusk.svg" "" ""))
 
       , "Image link with non-image target" =:
-          "[[http://example.com][logo.png]]" =?>
-          (para $ link "http://example.com" "" (image "logo.png" "" ""))
+          "[[http://example.com][./logo.png]]" =?>
+          (para $ link "http://example.com" "" (image "./logo.png" "" ""))
 
       , "Plain link" =:
           "Posts on http://zeitlens.com/ can be funny at times." =?>
@@ -296,6 +303,91 @@ tests =
                          , citationHash = 0}
           in (para $ cite [citation] "[see @item1 p. 34-35]")
 
+      , "Org-ref simple citation" =:
+        "cite:pandoc" =?>
+        let citation = Citation
+                       { citationId = "pandoc"
+                       , citationPrefix = mempty
+                       , citationSuffix = mempty
+                       , citationMode = AuthorInText
+                       , citationNoteNum = 0
+                       , citationHash = 0
+                       }
+        in (para $ cite [citation] "cite:pandoc")
+
+      , "Org-ref simple citep citation" =:
+        "citep:pandoc" =?>
+        let citation = Citation
+                       { citationId = "pandoc"
+                       , citationPrefix = mempty
+                       , citationSuffix = mempty
+                       , citationMode = NormalCitation
+                       , citationNoteNum = 0
+                       , citationHash = 0
+                       }
+        in (para $ cite [citation] "citep:pandoc")
+
+      , "Org-ref extended citation" =:
+        "[[citep:Dominik201408][See page 20::, for example]]" =?>
+        let citation = Citation
+                       { citationId = "Dominik201408"
+                       , citationPrefix = toList "See page 20"
+                       , citationSuffix = toList ", for example"
+                       , citationMode = NormalCitation
+                       , citationNoteNum = 0
+                       , citationHash = 0
+                       }
+        in (para $ cite [citation] "[[citep:Dominik201408][See page 20::, for example]]")
+
+      , testGroup "Berkeley-style citations" $
+        let pandocCite = Citation
+              { citationId = "Pandoc"
+              , citationPrefix = mempty
+              , citationSuffix = mempty
+              , citationMode = NormalCitation
+              , citationNoteNum = 0
+              , citationHash = 0
+              }
+            pandocInText = pandocCite { citationMode = AuthorInText }
+            dominikCite = Citation
+              { citationId = "Dominik201408"
+              , citationPrefix = mempty
+              , citationSuffix = mempty
+              , citationMode = NormalCitation
+              , citationNoteNum = 0
+              , citationHash = 0
+              }
+            dominikInText = dominikCite { citationMode = AuthorInText }
+        in [
+            "Berkeley-style in-text citation" =:
+              "See @Dominik201408." =?>
+                (para $ "See "
+                      <> cite [dominikInText] "@Dominik201408"
+                      <> ".")
+
+          , "Berkeley-style parenthetical citation list" =:
+              "[(cite): see; @Dominik201408;also @Pandoc; and others]" =?>
+              let pandocCite'  = pandocCite {
+                                   citationPrefix = toList "also"
+                                 , citationSuffix = toList "and others"
+                                 }
+                  dominikCite' = dominikCite {
+                                   citationPrefix = toList "see"
+                                 }
+              in (para $ cite [dominikCite', pandocCite'] "")
+
+          , "Berkeley-style plain citation list" =:
+              "[cite: See; @Dominik201408; and @Pandoc; and others]" =?>
+              let pandocCite' = pandocInText {
+                                  citationPrefix = toList "and"
+                                }
+              in (para $ "See "
+                      <> cite [dominikInText] ""
+                      <> "," <> space
+                      <> cite [pandocCite'] ""
+                      <> "," <> space <> "and others")
+        ]
+
       , "Inline LaTeX symbol" =:
           "\\dots" =?>
           para "…"
@@ -304,6 +396,10 @@ tests =
           "\\textit{Emphasised}" =?>
           para (emph "Emphasised")
 
+      , "Inline LaTeX command with spaces" =:
+          "\\emph{Emphasis mine}" =?>
+          para (emph "Emphasis mine")
+
       , "Inline LaTeX math symbol" =:
           "\\tau" =?>
           para (emph "τ")
@@ -311,6 +407,10 @@ tests =
       , "Unknown inline LaTeX command" =:
           "\\notacommand{foo}" =?>
           para (rawInline "latex" "\\notacommand{foo}")
+
+      , "Export snippet" =:
+          "@@html:<kbd>M-x org-agenda</kbd>@@" =?>
+          para (rawInline "html" "<kbd>M-x org-agenda</kbd>")
 
       , "MathML symbol in LaTeX-style" =:
           "There is a hackerspace in Lübeck, Germany, called nbsp (unicode symbol: '\\nbsp')." =?>
@@ -324,13 +424,17 @@ tests =
           "\\copy" =?>
           para "©"
 
+      , "MathML symbols, space separated" =:
+          "\\ForAll \\Auml" =?>
+          para "∀ Ä"
+
       , "LaTeX citation" =:
           "\\cite{Coffee}" =?>
           let citation = Citation
                          { citationId = "Coffee"
                          , citationPrefix = []
                          , citationSuffix = []
-                         , citationMode = AuthorInText
+                         , citationMode = NormalCitation
                          , citationNoteNum = 0
                          , citationHash = 0}
           in (para . cite [citation] $ rawInline "latex" "\\cite{Coffee}")
@@ -363,7 +467,14 @@ tests =
       , "Author" =:
         "#+author: Albert /Emacs-Fanboy/ Krewinkel" =?>
         let author = toList . spcSep $ [ "Albert", emph "Emacs-Fanboy", "Krewinkel" ]
-            meta = setMeta "author" (MetaInlines author) $ nullMeta
+            meta = setMeta "author" (MetaList [MetaInlines author]) $ nullMeta
+        in Pandoc meta mempty
+
+      , "Multiple authors" =:
+        "#+author: James Dewey Watson, Francis Harry Compton Crick " =?>
+        let watson = MetaInlines $ toList "James Dewey Watson"
+            crick = MetaInlines $ toList "Francis Harry Compton Crick"
+            meta = setMeta "author" (MetaList [watson, crick]) $ nullMeta
         in Pandoc meta mempty
 
       , "Date" =:
@@ -374,8 +485,8 @@ tests =
 
       , "Description" =:
         "#+DESCRIPTION: Explanatory text" =?>
-        let description = toList . spcSep $ [ "Explanatory", "text" ]
-            meta = setMeta "description" (MetaInlines description) $ nullMeta
+        let description = "Explanatory text"
+            meta = setMeta "description" (MetaString description) $ nullMeta
         in Pandoc meta mempty
 
       , "Properties drawer" =:
@@ -384,6 +495,38 @@ tests =
                   , "  :END:"
                   ] =?>
           (mempty::Blocks)
+
+      , "LaTeX_headers options are translated to header-includes" =:
+          "#+LaTeX_header: \\usepackage{tikz}" =?>
+          let latexInlines = rawInline "latex" "\\usepackage{tikz}"
+              inclList = MetaList [MetaInlines (toList latexInlines)]
+              meta = setMeta "header-includes" inclList nullMeta
+          in Pandoc meta mempty
+
+      , "LaTeX_class option is translated to documentclass" =:
+          "#+LATEX_CLASS: article" =?>
+          let meta = setMeta "documentclass" (MetaString "article") nullMeta
+          in Pandoc meta mempty
+
+      , "LaTeX_class_options is translated to classoption" =:
+          "#+LATEX_CLASS_OPTIONS: [a4paper]" =?>
+          let meta = setMeta "classoption" (MetaString "a4paper") nullMeta
+          in Pandoc meta mempty
+
+      , "LaTeX_class_options is translated to classoption" =:
+          "#+html_head: <meta/>" =?>
+          let html = rawInline "html" "<meta/>"
+              inclList = MetaList [MetaInlines (toList html)]
+              meta = setMeta "header-includes" inclList nullMeta
+          in Pandoc meta mempty
+
+      , "later meta definitions take precedence" =:
+          unlines [ "#+AUTHOR: this will not be used"
+                  , "#+author: Max"
+                  ] =?>
+          let author = MetaInlines [Str "Max"]
+              meta = setMeta "author" (MetaList [author]) $ nullMeta
+          in Pandoc meta mempty
 
       , "Logbook drawer" =:
           unlines [ "  :LogBook:"
@@ -400,17 +543,18 @@ tests =
                   ] =?>
           para "Before" <> para "After"
 
-      , "Drawer start is the only text in first line of a drawer" =:
+      , "Drawer markers must be the only text in the line" =:
           unlines [ "  :LOGBOOK: foo"
-                  , "  :END:"
+                  , "  :END: bar"
                   ] =?>
-          para (spcSep [ ":LOGBOOK:", "foo", ":END:" ])
+          para (":LOGBOOK: foo" <> softbreak <> ":END: bar")
 
-      , "Drawers with unknown names are just text" =:
+      , "Drawers can be arbitrary" =:
           unlines [ ":FOO:"
+                  , "/bar/"
                   , ":END:"
                   ] =?>
-          para (":FOO:" <> space <> ":END:")
+          divWith (mempty, ["FOO", "drawer"], mempty) (para $ emph "bar")
 
       , "Anchor reference" =:
           unlines [ "<<link-here>> Target."
@@ -457,6 +601,92 @@ tests =
                   , "[[expl:foo][bar]]"
                   ] =?>
           (para (link "http://example.com/foo" "" "bar"))
+
+
+      , testGroup "export options"
+
+          [ "disable simple sub/superscript syntax" =:
+              unlines [ "#+OPTIONS: ^:nil"
+                      , "a^b"
+                      ] =?>
+              para "a^b"
+
+          , "directly select drawers to be exported" =:
+              unlines [ "#+OPTIONS: d:(\"IMPORTANT\")"
+                      , ":IMPORTANT:"
+                      , "23"
+                      , ":END:"
+                      , ":BORING:"
+                      , "very boring"
+                      , ":END:"
+                      ] =?>
+              divWith (mempty, ["IMPORTANT", "drawer"], mempty) (para "23")
+
+          , "exclude drawers from being exported" =:
+              unlines [ "#+OPTIONS: d:(not \"BORING\")"
+                      , ":IMPORTANT:"
+                      , "5"
+                      , ":END:"
+                      , ":BORING:"
+                      , "very boring"
+                      , ":END:"
+                      ] =?>
+              divWith (mempty, ["IMPORTANT", "drawer"], mempty) (para "5")
+
+          , "don't include archive trees" =:
+              unlines [ "#+OPTIONS: arch:nil"
+                      , "* old  :ARCHIVE:"
+                      ] =?>
+              (mempty ::Blocks)
+
+          , "include complete archive trees" =:
+              unlines [ "#+OPTIONS: arch:t"
+                      , "* old  :ARCHIVE:"
+                      , "  boring"
+                      ] =?>
+              let tagSpan t = spanWith ("", ["tag"], [("data-tag-name", t)]) mempty
+              in mconcat [ headerWith ("old", [], mempty) 1 ("old" <> tagSpan "ARCHIVE")
+                         , para "boring"
+                         ]
+
+          , "include archive tree header only" =:
+              unlines [ "#+OPTIONS: arch:headline"
+                      , "* old  :ARCHIVE:"
+                      , "  boring"
+                      ] =?>
+              let tagSpan t = spanWith ("", ["tag"], [("data-tag-name", t)]) mempty
+              in headerWith ("old", [], mempty) 1 ("old" <> tagSpan "ARCHIVE")
+
+          , "limit headline depth" =:
+              unlines [ "#+OPTIONS: H:2"
+                      , "* section"
+                      , "** subsection"
+                      , "*** list item 1"
+                      , "*** list item 2"
+                      ] =?>
+              mconcat [ headerWith ("section", [], [])    1 "section"
+                      , headerWith ("subsection", [], []) 2 "subsection"
+                      , orderedList [ para "list item 1", para "list item 2" ]
+                      ]
+
+          , "disable author export" =:
+              unlines [ "#+OPTIONS: author:nil"
+                      , "#+AUTHOR: ShyGuy"
+                      ] =?>
+              Pandoc nullMeta mempty
+
+          , "disable creator export" =:
+              unlines [ "#+OPTIONS: creator:nil"
+                      , "#+creator: The Architect"
+                      ] =?>
+              Pandoc nullMeta mempty
+
+          , "disable email export" =:
+              unlines [ "#+OPTIONS: email:nil"
+                      , "#+email: no-mail-please@example.com"
+                      ] =?>
+              Pandoc nullMeta mempty
+          ]
       ]
 
   , testGroup "Basic Blocks" $
@@ -569,6 +799,34 @@ tests =
                   ] =?>
           (mempty::Blocks)
 
+      , "Subtree with :noexport:" =:
+          unlines [ "* Exported"
+                  , "** This isn't exported :noexport:"
+                  , "*** This neither"
+                  , "** But this is"
+                  ] =?>
+          mconcat [ headerWith ("exported", [], []) 1 "Exported"
+                  , headerWith ("but-this-is", [], []) 2 "But this is"
+                  ]
+
+      , "Preferences are treated as header attributes" =:
+          unlines [ "* foo"
+                  , "  :PROPERTIES:"
+                  , "  :custom_id: fubar"
+                  , "  :bar: baz"
+                  , "  :END:"
+                  ] =?>
+          headerWith ("fubar", [], [("bar", "baz")]) 1 "foo"
+
+
+      , "Headers marked with a unnumbered property get a class of the same name" =:
+          unlines [ "* Not numbered"
+                  , "  :PROPERTIES:"
+                  , "  :UNNUMBERED: t"
+                  , "  :END:"
+                  ] =?>
+          headerWith ("not-numbered", ["unnumbered"], []) 1 "Not numbered"
+
       , "Paragraph starting with an asterisk" =:
           "*five" =?>
           para "*five"
@@ -577,7 +835,7 @@ tests =
           unlines [ "lucky"
                   , "*star"
                   ] =?>
-          para ("lucky" <> space <> "*star")
+          para ("lucky" <> softbreak <> "*star")
 
       , "Example block" =:
           unlines [ ": echo hello"
@@ -618,26 +876,47 @@ tests =
                   , "#+END_COMMENT"] =?>
           (mempty::Blocks)
 
-      , "Figure" =:
-          unlines [ "#+caption: A very courageous man."
-                  , "#+name: goodguy"
-                  , "[[edward.jpg]]"
-                  ] =?>
-          para (image "edward.jpg" "fig:goodguy" "A very courageous man.")
+      , testGroup "Figures" $
+        [ "Figure" =:
+            unlines [ "#+caption: A very courageous man."
+                    , "#+name: goodguy"
+                    , "[[file:edward.jpg]]"
+                    ] =?>
+            para (image "edward.jpg" "fig:goodguy" "A very courageous man.")
 
-      , "Unnamed figure" =:
-          unlines [ "#+caption: A great whistleblower."
-                  , "[[snowden.png]]"
-                  ] =?>
-          para (image "snowden.png" "" "A great whistleblower.")
+        , "Figure with no name" =:
+            unlines [ "#+caption: I've been through the desert on this"
+                    , "[[file:horse.png]]"
+                    ] =?>
+            para (image "horse.png" "fig:" "I've been through the desert on this")
 
-      , "Figure with `fig:` prefix in name" =:
-          unlines [ "#+caption: Used as a metapher in evolutionary biology."
-                  , "#+name: fig:redqueen"
-                  , "[[the-red-queen.jpg]]"
-                  ] =?>
-          para (image "the-red-queen.jpg" "fig:redqueen"
-                      "Used as a metapher in evolutionary biology.")
+        , "Figure with `fig:` prefix in name" =:
+            unlines [ "#+caption: Used as a metapher in evolutionary biology."
+                    , "#+name: fig:redqueen"
+                    , "[[./the-red-queen.jpg]]"
+                    ] =?>
+            para (image "./the-red-queen.jpg" "fig:redqueen"
+                        "Used as a metapher in evolutionary biology.")
+
+        , "Figure with HTML attributes" =:
+            unlines [ "#+CAPTION: mah brain just explodid"
+                    , "#+NAME: lambdacat"
+                    , "#+ATTR_HTML: :style color: blue :role button"
+                    , "[[file:lambdacat.jpg]]"
+                    ] =?>
+            let kv = [("style", "color: blue"), ("role", "button")]
+                name = "fig:lambdacat"
+                caption = "mah brain just explodid"
+            in para (imageWith (mempty, mempty, kv) "lambdacat.jpg" name caption)
+
+        , "Labelled figure" =:
+            unlines [ "#+CAPTION: My figure"
+                    , "#+LABEL: fig:myfig"
+                    , "[[file:blub.png]]"
+                    ] =?>
+            let attr = ("fig:myfig", mempty, mempty)
+            in para (imageWith attr "blub.png" "fig:" "My figure")
+        ]
 
       , "Footnote" =:
           unlines [ "A footnote[1]"
@@ -709,8 +988,8 @@ tests =
            "  Tony*\n" ++
            "- /Sideshow\n" ++
            " Bob/") =?>
-          bulletList [ plain $ strong ("Fat" <> space <> "Tony")
-                     , plain $ emph ("Sideshow" <> space <> "Bob")
+          bulletList [ plain $ strong ("Fat" <> softbreak <> "Tony")
+                     , plain $ emph ("Sideshow" <> softbreak <> "Bob")
                      ]
 
       , "Nested Bullet Lists" =:
@@ -927,7 +1206,7 @@ tests =
 
       , "Empty table" =:
           "||" =?>
-          simpleTable' 1 mempty mempty
+          simpleTable' 1 mempty [[mempty]]
 
       , "Glider Table" =:
           unlines [ "| 1 | 0 | 0 |"
@@ -982,6 +1261,17 @@ tests =
                 , [ plain "dynamic", plain "Lisp" ]
                 ]
 
+      , "Table with empty cells" =:
+          "|||c|" =?>
+          simpleTable' 3 mempty [[mempty, mempty, plain "c"]]
+
+      , "Table with empty rows" =:
+          unlines [ "| first  |"
+                  , "|        |"
+                  , "| third  |"
+                  ] =?>
+          simpleTable' 1 mempty [[plain "first"], [mempty], [plain "third"]]
+
       , "Table with alignment row" =:
           unlines [ "| Numbers | Text | More |"
                   , "| <c>     | <r>  |      |"
@@ -1010,10 +1300,10 @@ tests =
                   , "| 1       | One  | foo  |"
                   , "| 2"
                   ] =?>
-          table "" (zip [AlignCenter, AlignRight, AlignDefault] [0, 0, 0])
-                [ plain "Numbers", plain "Text" , plain mempty ]
-                [ [ plain "1"      , plain "One"  , plain "foo"  ]
-                , [ plain "2"      , plain mempty , plain mempty  ]
+          table "" (zip [AlignCenter, AlignRight] [0, 0])
+                [ plain "Numbers", plain "Text" ]
+                [ [ plain "1" , plain "One" , plain "foo" ]
+                , [ plain "2" ]
                 ]
 
       , "Table with caption" =:
@@ -1038,6 +1328,33 @@ tests =
            let attr' = ("", ["haskell"], [])
                code' = "main = putStrLn greeting\n" ++
                        "  where greeting = \"moin\"\n"
+           in codeBlockWith attr' code'
+
+      , "Source block with indented code" =:
+           unlines [ "  #+BEGIN_SRC haskell"
+                   , "    main = putStrLn greeting"
+                   , "      where greeting = \"moin\""
+                   , "  #+END_SRC" ] =?>
+           let attr' = ("", ["haskell"], [])
+               code' = "main = putStrLn greeting\n" ++
+                       "  where greeting = \"moin\"\n"
+           in codeBlockWith attr' code'
+
+      , "Source block with tab-indented code" =:
+           unlines [ "\t#+BEGIN_SRC haskell"
+                   , "\tmain = putStrLn greeting"
+                   , "\t  where greeting = \"moin\""
+                   , "\t#+END_SRC" ] =?>
+           let attr' = ("", ["haskell"], [])
+               code' = "main = putStrLn greeting\n" ++
+                       "  where greeting = \"moin\"\n"
+           in codeBlockWith attr' code'
+
+      , "Empty source block" =:
+           unlines [ "  #+BEGIN_SRC haskell"
+                   , "  #+END_SRC" ] =?>
+           let attr' = ("", ["haskell"], [])
+               code' = ""
            in codeBlockWith attr' code'
 
       , "Source block between paragraphs" =:
@@ -1184,7 +1501,7 @@ tests =
               ]
           ]
 
-      , "Verse block with newlines" =:
+      , "Verse block with blank lines" =:
           unlines [ "#+BEGIN_VERSE"
                   , "foo"
                   , ""
@@ -1192,6 +1509,28 @@ tests =
                   , "#+END_VERSE"
                   ] =?>
           para ("foo" <> linebreak <> linebreak <> "bar")
+
+      , "Verse block with varying indentation" =:
+          unlines [ "#+BEGIN_VERSE"
+                  , "  hello darkness"
+                  , "my old friend"
+                  , "#+END_VERSE"
+                  ] =?>
+          para ("\160\160hello darkness" <> linebreak <> "my old friend")
+
+      , "Raw block LaTeX" =:
+          unlines [ "#+BEGIN_LaTeX"
+                  , "The category $\\cat{Set}$ is adhesive."
+                  , "#+END_LaTeX"
+                  ] =?>
+          rawBlock "latex" "The category $\\cat{Set}$ is adhesive.\n"
+
+      , "Export block HTML" =:
+          unlines [ "#+BEGIN_export html"
+                  , "<samp>Hello, World!</samp>"
+                  , "#+END_export"
+                  ] =?>
+          rawBlock "html" "<samp>Hello, World!</samp>\n"
 
       , "LaTeX fragment" =:
           unlines [ "\\begin{equation}"

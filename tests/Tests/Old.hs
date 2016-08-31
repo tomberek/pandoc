@@ -57,7 +57,7 @@ tests = [ testGroup "markdown"
               "tables.txt" "tables.native"
             , test "pipe tables" ["-r", "markdown", "-w", "native", "--columns=80"]
               "pipe-tables.txt" "pipe-tables.native"
-            , test "more" ["-r", "markdown", "-w", "native", "-S"]
+            , test "more" ["-r", "markdown", "-w", "native", "-s", "-S"]
               "markdown-reader-more.txt" "markdown-reader-more.native"
             , lhsReaderTest "markdown+lhs"
             ]
@@ -107,6 +107,9 @@ tests = [ testGroup "markdown"
             "docbook-reader.docbook" "docbook-reader.native"
           , test "reader" ["-r", "docbook", "-w", "native", "-s"]
             "docbook-xref.docbook" "docbook-xref.native"
+          ]
+        , testGroup "docbook5"
+          [ testGroup "writer" $ writerTests "docbook5"
           ]
         , testGroup "native"
           [ testGroup "writer" $ writerTests "native"
@@ -162,8 +165,8 @@ tests = [ testGroup "markdown"
           [ test "reader" ["-r", "twiki", "-w", "native", "-s"]
               "twiki-reader.twiki" "twiki-reader.native" ]
         , testGroup "other writers" $ map (\f -> testGroup f $ writerTests f)
-          [ "opendocument" , "context" , "texinfo", "icml"
-          , "man" , "plain" , "rtf", "org", "asciidoc"
+          [ "opendocument" , "context" , "texinfo", "icml", "tei"
+          , "man" , "plain" , "rtf", "org", "asciidoc", "zimwiki"
           ]
         , testGroup "writers-lang-and-dir"
           [ test "latex" ["-f", "native", "-t", "latex", "-s"]
@@ -184,7 +187,7 @@ lhsWriterTests format
     , t "lhs to lhs"    (format ++ "+lhs")
     ]
   where
-    t n f = test n ["--columns=78", "-r", "native", "-s", "-w", f]
+    t n f = test n ["--wrap=preserve", "-r", "native", "-s", "-w", f]
              "lhs-test.native" ("lhs-test" <.> f)
 
 lhsReaderTest :: String -> Test

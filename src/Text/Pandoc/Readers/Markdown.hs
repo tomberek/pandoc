@@ -36,10 +36,11 @@ import Data.List ( transpose, sortBy, findIndex, intersperse, intercalate )
 import qualified Data.Map as M
 import Data.Scientific (coefficient, base10Exponent)
 import Data.Ord ( comparing )
-import Data.Char ( isSpace, isAlphaNum, toLower )
+import Data.Char ( isSpace, isAlphaNum, toLower, isPunctuation )
 import Data.Maybe
 import Text.Pandoc.Definition
 import Text.Pandoc.Emoji (emojis)
+import Text.Pandoc.Generic (bottomUp)
 import qualified Data.Text as T
 import Data.Text (Text)
 import qualified Data.Yaml as Yaml
@@ -51,6 +52,7 @@ import qualified Data.Vector as V
 import Text.Pandoc.Builder (Inlines, Blocks, trimInlines)
 import Text.Pandoc.Options
 import Text.Pandoc.Shared
+import Text.Pandoc.Pretty (charWidth)
 import Text.Pandoc.XML (fromEntities)
 import Text.Pandoc.Parsing hiding (tableWith)
 import Text.Pandoc.Readers.LaTeX ( rawLaTeXBlock )
@@ -59,7 +61,6 @@ import Text.Pandoc.Readers.HTML ( htmlTag, htmlInBalanced, isInlineTag, isBlockT
 import Control.Monad
 import System.FilePath (takeExtension, addExtension)
 import Text.HTML.TagSoup
-import Text.HTML.TagSoup.Match (tagOpen)
 import qualified Data.Set as Set
 import Text.Printf (printf)
 import Debug.Trace (trace)
@@ -120,9 +121,6 @@ inList :: MarkdownParser ()
 inList = do
   ctx <- stateParserContext <$> getState
   guard (ctx == ListItemState)
-
-isNull :: F Inlines -> Bool
-isNull ils = B.isNull $ runF ils def
 
 spnl :: Parser [Char] st ()
 spnl = try $ do
@@ -187,31 +185,38 @@ charsInBalancedBrackets openBrackets =
 -- document structure
 --
 
-titleLine :: MarkdownParser (F Inlines)
-titleLine = try $ do
+rawTitleBlockLine :: MarkdownParser String
+rawTitleBlockLine = do
   char '%'
   skipSpaces
-  res <- many $ (notFollowedBy newline >> inline)
-             <|> try (endline >> whitespace)
-  newline
+  first <- anyLine
+  rest <- many $ try $ do spaceChar
+                          notFollowedBy blankline
+                          skipSpaces
+                          anyLine
+  return $ trim $ unlines (first:rest)
+
+titleLine :: MarkdownParser (F Inlines)
+titleLine = try $ do
+  raw <- rawTitleBlockLine
+  res <- parseFromString (many inline) raw
   return $ trimInlinesF $ mconcat res
 
 authorsLine :: MarkdownParser (F [Inlines])
 authorsLine = try $ do
-  char '%'
-  skipSpaces
-  authors <- sepEndBy (many (notFollowedBy (satisfy $ \c ->
-                                c == ';' || c == '\n') >> inline))
-                       (char ';' <|>
-                        try (newline >> notFollowedBy blankline >> spaceChar))
-  newline
-  return $ sequence $ filter (not . isNull) $ map (trimInlinesF . mconcat) authors
+  raw <- rawTitleBlockLine
+  let sep = (char ';' <* spaces) <|> newline
+  let pAuthors = sepEndBy
+            (trimInlinesF . mconcat <$> many
+                 (try $ notFollowedBy sep >> inline))
+            sep
+  sequence <$> parseFromString pAuthors raw
 
 dateLine :: MarkdownParser (F Inlines)
 dateLine = try $ do
-  char '%'
-  skipSpaces
-  trimInlinesF . mconcat <$> manyTill inline newline
+  raw <- rawTitleBlockLine
+  res <- parseFromString (many inline) raw
+  return $ trimInlinesF $ mconcat res
 
 titleBlock :: MarkdownParser ()
 titleBlock = pandocTitleBlock <|> mmdTitleBlock
@@ -356,7 +361,19 @@ parseMarkdown = do
   st <- getState
   let meta = runF (stateMeta' st) st
   let Pandoc _ bs = B.doc $ runF blocks st
-  return $ Pandoc meta bs
+  eastAsianLineBreaks <- option False $
+                    True <$ guardEnabled Ext_east_asian_line_breaks
+  return $ (if eastAsianLineBreaks
+               then bottomUp softBreakFilter
+               else id) $ Pandoc meta bs
+
+softBreakFilter :: [Inline] -> [Inline]
+softBreakFilter (x:SoftBreak:y:zs) =
+  case (stringify x, stringify y) of
+        (xs@(_:_), (c:_))
+          | charWidth (last xs) == 2 && charWidth c == 2 -> x:y:zs
+        _ -> x:SoftBreak:y:zs
+softBreakFilter xs = xs
 
 referenceKey :: MarkdownParser (F Blocks)
 referenceKey = try $ do
@@ -368,23 +385,26 @@ referenceKey = try $ do
   let sourceURL = liftM unwords $ many $ try $ do
                     skipMany spaceChar
                     notFollowedBy' referenceTitle
+                    notFollowedBy' $ guardEnabled Ext_link_attributes >> attributes
                     notFollowedBy' (() <$ reference)
                     many1 $ notFollowedBy space >> litChar
   let betweenAngles = try $ char '<' >> manyTill litChar (char '>')
   src <- try betweenAngles <|> sourceURL
   tit <- option "" referenceTitle
-  -- currently we just ignore MMD-style link/image attributes
-  _kvs <- option [] $ guardEnabled Ext_link_attributes
-                      >> many (try $ spnl >> keyValAttr)
+  attr   <- option nullAttr $ try $
+              guardEnabled Ext_link_attributes >> skipSpaces >> attributes
+  addKvs <- option [] $ guardEnabled Ext_mmd_link_attributes
+                          >> many (try $ spnl >> keyValAttr)
   blanklines
-  let target = (escapeURI $ trimr src,  tit)
+  let attr'  = extractIdClass $ foldl (\x f -> f x) attr addKvs
+      target = (escapeURI $ trimr src, tit)
   st <- getState
   let oldkeys = stateKeys st
   let key = toKey raw
   case M.lookup key oldkeys of
     Just _  -> addWarning (Just pos) $ "Duplicate link reference `" ++ raw ++ "'"
     Nothing -> return ()
-  updateState $ \s -> s { stateKeys = M.insert key target oldkeys }
+  updateState $ \s -> s { stateKeys = M.insert key (target, attr') oldkeys }
   return $ return mempty
 
 referenceTitle :: MarkdownParser String
@@ -476,6 +496,7 @@ block = do
                , htmlBlock
                , table
                , codeBlockIndented
+               , guardEnabled Ext_latex_macros *> (macro >>= return . return)
                , rawTeXBlock
                , lineBlock
                , blockQuote
@@ -516,9 +537,9 @@ atxHeader = try $ do
   (text, raw) <- withRaw $
           trimInlinesF . mconcat <$> many (notFollowedBy atxClosing >> inline)
   attr <- atxClosing
-  attr'@(ident,_,_) <- registerHeader attr (runF text defaultParserState)
+  attr' <- registerHeader attr (runF text defaultParserState)
   guardDisabled Ext_implicit_header_references
-    <|> registerImplicitHeader raw ident
+    <|> registerImplicitHeader raw attr'
   return $ B.headerWith attr' level <$> text
 
 atxClosing :: MarkdownParser Attr
@@ -559,16 +580,16 @@ setextHeader = try $ do
   many (char underlineChar)
   blanklines
   let level = (fromMaybe 0 $ findIndex (== underlineChar) setextHChars) + 1
-  attr'@(ident,_,_) <- registerHeader attr (runF text defaultParserState)
+  attr' <- registerHeader attr (runF text defaultParserState)
   guardDisabled Ext_implicit_header_references
-    <|> registerImplicitHeader raw ident
+    <|> registerImplicitHeader raw attr'
   return $ B.headerWith attr' level <$> text
 
-registerImplicitHeader :: String -> String -> MarkdownParser ()
-registerImplicitHeader raw ident = do
+registerImplicitHeader :: String -> Attr -> MarkdownParser ()
+registerImplicitHeader raw attr@(ident, _, _) = do
   let key = toKey $ "[" ++ raw ++ "]"
   updateState (\s -> s { stateHeaderKeys =
-                         M.insert key ('#':ident,"") (stateHeaderKeys s) })
+                         M.insert key (('#':ident,""), attr) (stateHeaderKeys s) })
 
 --
 -- hrule block
@@ -979,11 +1000,11 @@ para = try $ do
             return $ do
               result' <- result
               case B.toList result' of
-                   [Image alt (src,tit)]
+                   [Image attr alt (src,tit)]
                      | Ext_implicit_figures `Set.member` exts ->
                         -- the fig: at beginning of title indicates a figure
                         return $ B.para $ B.singleton
-                               $ Image alt (src,'f':'i':'g':':':tit)
+                               $ Image attr alt (src,'f':'i':'g':':':tit)
                    _ -> return $ B.para result'
 
 plain :: MarkdownParser (F Blocks)
@@ -1034,12 +1055,11 @@ strictHtmlBlock :: MarkdownParser String
 strictHtmlBlock = htmlInBalanced (not . isInlineTag)
 
 rawVerbatimBlock :: MarkdownParser String
-rawVerbatimBlock = try $ do
-  (TagOpen tag _, open) <- htmlTag (tagOpen (flip elem
-                                                  ["pre", "style", "script"])
-                              (const True))
-  contents <- manyTill anyChar (htmlTag (~== TagClose tag))
-  return $ open ++ contents ++ renderTags' [TagClose tag]
+rawVerbatimBlock = htmlInBalanced isVerbTag
+  where isVerbTag (TagOpen "pre" _)    = True
+        isVerbTag (TagOpen "style" _)  = True
+        isVerbTag (TagOpen "script" _) = True
+        isVerbTag _                    = False
 
 rawTeXBlock :: MarkdownParser (F Blocks)
 rawTeXBlock = do
@@ -1338,15 +1358,18 @@ pipeTable = try $ do
   nonindentSpaces
   lookAhead nonspaceChar
   (heads,(aligns, seplengths)) <- (,) <$> pipeTableRow <*> pipeBreak
-  (lines', rawRows) <- unzip <$> many (withRaw pipeTableRow)
-  let maxlength = maximum $ map length rawRows
+  let heads' = take (length aligns) <$> heads
+  lines' <- many pipeTableRow
+  let lines'' = map (take (length aligns) <$>) lines'
+  let maxlength = maximum $
+       map (\x -> length . stringify $ runF x def) (heads' : lines'')
   numColumns <- getOption readerColumns
   let widths = if maxlength > numColumns
                   then map (\len ->
                            fromIntegral (len + 1) / fromIntegral numColumns)
                              seplengths
                   else replicate (length aligns) 0.0
-  return $ (aligns, widths, heads, sequence lines')
+  return $ (aligns, widths, heads', sequence lines'')
 
 sepPipe :: MarkdownParser ()
 sepPipe = try $ do
@@ -1355,25 +1378,27 @@ sepPipe = try $ do
 
 -- parse a row, also returning probable alignments for org-table cells
 pipeTableRow :: MarkdownParser (F [Blocks])
-pipeTableRow = do
+pipeTableRow = try $ do
+  scanForPipe
   skipMany spaceChar
   openPipe <- (True <$ char '|') <|> return False
-  let cell = mconcat <$>
-                 many (notFollowedBy (blankline <|> char '|') >> inline)
-  first <- cell
-  rest <- many $ sepPipe *> cell
+  -- split into cells
+  let chunk = void (code <|> rawHtmlInline <|> escapedChar <|> rawLaTeXInline')
+       <|> void (noneOf "|\n\r")
+  let cellContents = ((trim . snd) <$> withRaw (many chunk)) >>=
+        parseFromString pipeTableCell
+  cells <- cellContents `sepEndBy1` (char '|')
   -- surrounding pipes needed for a one-column table:
-  guard $ not (null rest && not openPipe)
-  optional (char '|')
+  guard $ not (length cells == 1 && not openPipe)
   blankline
-  let cells  = sequence (first:rest)
-  return $ do
-    cells' <- cells
-    return $ map
-        (\ils ->
-           case trimInlines ils of
-                 ils' | B.isNull ils' -> mempty
-                      | otherwise   -> B.plain $ ils') cells'
+  return $ sequence cells
+
+pipeTableCell :: MarkdownParser (F Blocks)
+pipeTableCell = do
+  result <- many inline
+  if null result
+     then return mempty
+     else return $ B.plain . mconcat <$> sequence result
 
 pipeTableHeaderPart :: Parser [Char] st (Alignment, Int)
 pipeTableHeaderPart = try $ do
@@ -1433,11 +1458,16 @@ table = try $ do
   caption <- case frontCaption of
                   Nothing  -> option (return mempty) tableCaption
                   Just c   -> return c
+  -- renormalize widths if greater than 100%:
+  let totalWidth = sum widths
+  let widths' = if totalWidth < 1
+                   then widths
+                   else map (/ totalWidth) widths
   return $ do
     caption' <- caption
     heads' <- heads
     lns' <- lns
-    return $ B.table caption' (zip aligns widths) heads' lns'
+    return $ B.table caption' (zip aligns widths') heads' lns'
 
 --
 -- inline
@@ -1523,6 +1553,12 @@ code = try $ do
   attr <- option ([],[],[]) (try $ guardEnabled Ext_inline_code_attributes >>
                                    optional whitespace >> attributes)
   return $ return $ B.codeWith attr $ trim $ concat result
+
+math :: MarkdownParser (F Inlines)
+math =  (return . B.displayMath <$> (mathDisplay >>= applyMacros'))
+     <|> (return . B.math <$> (mathInline >>= applyMacros')) <+?>
+               ((getOption readerSmart >>= guard) *> (return <$> apostrophe)
+                <* notFollowedBy (space <|> satisfy isPunctuation))
 
 -- Parses material enclosed in *s, **s, _s, or __s.
 -- Designed to avoid backtracking.
@@ -1666,7 +1702,7 @@ endline = try $ do
   (eof >> return mempty)
     <|> (guardEnabled Ext_hard_line_breaks >> return (return B.linebreak))
     <|> (guardEnabled Ext_ignore_line_breaks >> return mempty)
-    <|> (return $ return B.space)
+    <|> (skipMany spaceChar >> return (return B.softbreak))
 
 --
 -- links
@@ -1710,16 +1746,18 @@ link = try $ do
   setState $ st{ stateAllowLinks = False }
   (lab,raw) <- reference
   setState $ st{ stateAllowLinks = True }
-  regLink B.link lab <|> referenceLink B.link (lab,raw)
+  regLink B.linkWith lab <|> referenceLink B.linkWith (lab,raw)
 
-regLink :: (String -> String -> Inlines -> Inlines)
+regLink :: (Attr -> String -> String -> Inlines -> Inlines)
         -> F Inlines -> MarkdownParser (F Inlines)
 regLink constructor lab = try $ do
   (src, tit) <- source
-  return $ constructor src tit <$> lab
+  attr <- option nullAttr $
+          guardEnabled Ext_link_attributes >> attributes
+  return $ constructor attr src tit <$> lab
 
 -- a link like [this][ref] or [this][] or [this]
-referenceLink :: (String -> String -> Inlines -> Inlines)
+referenceLink :: (Attr -> String -> String -> Inlines -> Inlines)
               -> (F Inlines, String) -> MarkdownParser (F Inlines)
 referenceLink constructor (lab, raw) = do
   sp <- (True <$ lookAhead (char ' ')) <|> return False
@@ -1731,7 +1769,7 @@ referenceLink constructor (lab, raw) = do
   let labIsRef = raw' == "" || raw' == "[]"
   let key = toKey $ if labIsRef then raw else raw'
   parsedRaw <- parseFromString (mconcat <$> many inline) raw'
-  fallback <- parseFromString (mconcat <$> many inline) $ dropBrackets raw
+  fallback  <- parseFromString (mconcat <$> many inline) $ dropBrackets raw
   implicitHeaderRefs <- option False $
                          True <$ guardEnabled Ext_implicit_header_references
   let makeFallback = do
@@ -1748,10 +1786,10 @@ referenceLink constructor (lab, raw) = do
             then do
               headerKeys <- asksF stateHeaderKeys
               case M.lookup key headerKeys of
-                   Just (src, tit) -> constructor src tit <$> lab
-                   Nothing         -> makeFallback
+                   Just ((src, tit), _) -> constructor nullAttr src tit <$> lab
+                   Nothing              -> makeFallback
             else makeFallback
-       Just (src,tit) -> constructor src tit <$> lab
+       Just ((src,tit), attr) -> constructor attr src tit <$> lab
 
 dropBrackets :: String -> String
 dropBrackets = reverse . dropRB . reverse . dropLB
@@ -1785,9 +1823,9 @@ image = try $ do
   char '!'
   (lab,raw) <- reference
   defaultExt <- getOption readerDefaultImageExtension
-  let constructor src = case takeExtension src of
-                              "" -> B.image (addExtension src defaultExt)
-                              _  -> B.image src
+  let constructor attr' src = case takeExtension src of
+                          "" -> B.imageWith attr' (addExtension src defaultExt)
+                          _  -> B.imageWith attr' src
   regLink constructor lab <|> referenceLink constructor (lab,raw)
 
 note :: MarkdownParser (F Inlines)
@@ -1930,7 +1968,7 @@ textualCite = try $ do
               spc | null spaces' = mempty
                   | otherwise    = B.space
           lab <- parseFromString (mconcat <$> many inline) $ dropBrackets raw'
-          fallback <- referenceLink B.link (lab,raw')
+          fallback <- referenceLink B.linkWith (lab,raw')
           return $ do
             fallback' <- fallback
             cs' <- cs

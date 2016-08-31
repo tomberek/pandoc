@@ -35,6 +35,7 @@ import Text.Pandoc.Compat.Monoid ((<>))
 import Text.Pandoc.Shared
 import Text.Pandoc.Writers.Shared
 import Text.Pandoc.Options
+import Text.Pandoc.ImageSize
 import Text.Pandoc.Templates
 import Text.Pandoc.Slides
 import Text.Pandoc.XML (fromEntities, escapeStringForXML)
@@ -79,9 +80,9 @@ strToHtml [] = ""
 
 -- | Hard linebreak.
 nl :: WriterOptions -> Html
-nl opts = if writerWrapText opts
-             then preEscapedString "\n"
-             else mempty
+nl opts = if writerWrapText opts == WrapNone
+             then mempty
+             else preEscapedString "\n"
 
 -- | Convert Pandoc document to Html string.
 writeHtmlString :: WriterOptions -> Pandoc -> String
@@ -124,7 +125,45 @@ pandocToHtml opts (Pandoc meta blocks) = do
   st <- get
   let notes = reverse (stNotes st)
   let thebody = blocks' >> footnoteSection opts notes
-  let context =   id $
+  let  math = case writerHTMLMathMethod opts of
+                      LaTeXMathML (Just url) ->
+                         H.script ! A.src (toValue url)
+                                  ! A.type_ "text/javascript"
+                                  $ mempty
+                      MathML (Just url) ->
+                         H.script ! A.src (toValue url)
+                                  ! A.type_ "text/javascript"
+                                  $ mempty
+                      MathJax url ->
+                         H.script ! A.src (toValue url)
+                                  ! A.type_ "text/javascript"
+                                  $ case writerSlideVariant opts of
+                                         SlideousSlides ->
+                                            preEscapedString
+                                            "MathJax.Hub.Queue([\"Typeset\",MathJax.Hub]);"
+                                         _ -> mempty
+                      JsMath (Just url) ->
+                         H.script ! A.src (toValue url)
+                                  ! A.type_ "text/javascript"
+                                  $ mempty
+                      KaTeX js css ->
+                         (H.script ! A.src (toValue js) $ mempty) <>
+                         (H.link ! A.rel "stylesheet" ! A.href (toValue css)) <>
+                         (H.script ! A.type_ "text/javascript" $ toHtml renderKaTeX)
+                      _ -> case lookup "mathml-script" (writerVariables opts) of
+                                 Just s | not (writerHtml5 opts) ->
+                                   H.script ! A.type_ "text/javascript"
+                                      $ preEscapedString
+                                       ("/*<![CDATA[*/\n" ++ s ++ "/*]]>*/\n")
+                                        | otherwise -> mempty
+                                 Nothing -> mempty
+  let context =   (if stHighlighting st
+                      then defField "highlighting-css"
+                             (styleToCss $ writerHighlightStyle opts)
+                      else id) $
+                  (if stMath st
+                      then defField "math" (renderHtml math)
+                      else id) $
                   defField "quotes" (stQuotes st) $
                   maybe id (defField "toc" . renderHtml) toc $
                   defField "author-meta" authsMeta $
@@ -138,9 +177,6 @@ pandocToHtml opts (Pandoc meta blocks) = do
                   defField "revealjs-url" ("reveal.js" :: String) $
                   defField "s5-url" ("s5/default" :: String) $
                   defField "html5" (writerHtml5 opts) $
-                  defField "center" (case lookupMeta "center" meta of
-                                          Just (MetaBool False) -> False
-                                          _                     -> True) $
                   metadata
   return (thebody, context)
 
@@ -253,11 +289,9 @@ elementToHtml slideLevel opts (Sec level num (id',classes,keyvals) title' elemen
                    $ if titleSlide
                         -- title slides have no content of their own
                         then filter isSec elements
-                        else if slide
-                                then case splitBy isPause elements of
-                                          []     -> []
-                                          (x:xs) -> x ++ concatMap inDiv xs
-                                else elements
+                        else case splitBy isPause elements of
+                                  []     -> []
+                                  (x:xs) -> x ++ concatMap inDiv xs
   let inNl x = mconcat $ nl opts : intersperse (nl opts) x ++ [nl opts]
   let classes' = ["titleslide" | titleSlide] ++ ["slide" | slide] ++
                   ["section" | (slide || writerSectionDivs opts) &&
@@ -306,10 +340,10 @@ parseMailto s = do
        _ -> fail "not a mailto: URL"
 
 -- | Obfuscate a "mailto:" link.
-obfuscateLink :: WriterOptions -> Html -> String -> Html
-obfuscateLink opts txt s | writerEmailObfuscation opts == NoObfuscation =
-  H.a ! A.href (toValue s) $ txt
-obfuscateLink opts (renderHtml -> txt) s =
+obfuscateLink :: WriterOptions -> Attr -> Html -> String -> Html
+obfuscateLink opts attr txt s | writerEmailObfuscation opts == NoObfuscation =
+  addAttrs opts attr $ H.a ! A.href (toValue s) $ txt
+obfuscateLink opts attr (renderHtml -> txt) s =
   let meth = writerEmailObfuscation opts
       s' = map toLower (take 7 s) ++ drop 7 s
   in  case parseMailto s' of
@@ -335,7 +369,7 @@ obfuscateLink opts (renderHtml -> txt) s =
                      linkText  ++ "+'<\\/'+'a'+'>');\n// -->\n")) >>
                      H.noscript (preEscapedString $ obfuscateString altText)
                 _ -> error $ "Unknown obfuscation method: " ++ show meth
-        _ -> H.a ! A.href (toValue s) $ toHtml txt  -- malformed email
+        _ -> addAttrs opts attr $ H.a ! A.href (toValue s) $ toHtml txt  -- malformed email
 
 -- | Obfuscate character as entity.
 obfuscateChar :: Char -> String
@@ -351,11 +385,33 @@ obfuscateString = concatMap obfuscateChar . fromEntities
 addAttrs :: WriterOptions -> Attr -> Html -> Html
 addAttrs opts attr h = foldl (!) h (attrsToHtml opts attr)
 
+toAttrs :: [(String, String)] -> [Attribute]
+toAttrs kvs = map (\(x,y) -> customAttribute (fromString x) (toValue y)) kvs
+
 attrsToHtml :: WriterOptions -> Attr -> [Attribute]
 attrsToHtml opts (id',classes',keyvals) =
   [prefixedId opts id' | not (null id')] ++
-  [A.class_ (toValue $ unwords classes') | not (null classes')] ++
-  map (\(x,y) -> customAttribute (fromString x) (toValue y)) keyvals
+  [A.class_ (toValue $ unwords classes') | not (null classes')] ++ toAttrs keyvals
+
+imgAttrsToHtml :: WriterOptions -> Attr -> [Attribute]
+imgAttrsToHtml opts attr =
+    attrsToHtml opts (ident,cls,kvs') ++
+    toAttrs (dimensionsToAttrList opts attr)
+  where
+    (ident,cls,kvs) = attr
+    kvs' = filter isNotDim kvs
+    isNotDim ("width", _)  = False
+    isNotDim ("height", _) = False
+    isNotDim _ = True
+
+dimensionsToAttrList :: WriterOptions -> Attr -> [(String, String)]
+dimensionsToAttrList opts attr = (go Width) ++ (go Height)
+  where
+    go dir = case (dimension dir attr) of
+               (Just (Percent a)) -> [("style", show dir ++ ":" ++ show (Percent a))]
+               (Just dim)         -> [(show dir, showInPixel opts dim)]
+               _ -> []
+
 
 imageExts :: [String]
 imageExts = [ "art", "bmp", "cdr", "cdt", "cpt", "cr2", "crw", "djvu", "erf",
@@ -376,8 +432,8 @@ blockToHtml :: WriterOptions -> Block -> State WriterState Html
 blockToHtml _ Null = return mempty
 blockToHtml opts (Plain lst) = inlineListToHtml opts lst
 -- title beginning with fig: indicates that the image is a figure
-blockToHtml opts (Para [Image txt (s,'f':'i':'g':':':tit)]) = do
-  img <- inlineToHtml opts (Image txt (s,tit))
+blockToHtml opts (Para [Image attr txt (s,'f':'i':'g':':':tit)]) = do
+  img <- inlineToHtml opts (Image attr txt (s,tit))
   let tocapt = if writerHtml5 opts
                   then H5.figcaption
                   else H.p ! A.class_ "caption"
@@ -412,6 +468,9 @@ blockToHtml opts (Div attr@(ident, classes, kvs) bs) = do
         else addAttrs opts (ident, classes', kvs) $ divtag $ contents'
 blockToHtml opts (RawBlock f str)
   | f == Format "html" = return $ preEscapedString str
+  | (f == Format "latex" || f == Format "tex") &&
+     allowsMathEnvironments (writerHTMLMathMethod opts) &&
+     isMathEnvironment str = blockToHtml opts $ Plain [Math DisplayMath str]
   | otherwise          = return mempty
 blockToHtml opts (HorizontalRule) = return $ if writerHtml5 opts then H5.hr else H.hr
 blockToHtml opts (CodeBlock (id',classes,keyvals) rawCode) = do
@@ -480,6 +539,9 @@ blockToHtml opts (OrderedList (startnum, numstyle, _) lst) = do
   let attribs = (if startnum /= 1
                    then [A.start $ toValue startnum]
                    else []) ++
+                (if numstyle == Example
+                    then [A.class_ "example"]
+                    else []) ++
                 (if numstyle /= DefaultStyle
                    then if writerHtml5 opts
                            then [A.type_ $
@@ -562,7 +624,7 @@ alignmentToString alignment = case alignment of
                                  AlignLeft    -> "left"
                                  AlignRight   -> "right"
                                  AlignCenter  -> "center"
-                                 AlignDefault -> "left"
+                                 AlignDefault -> ""
 
 tableItemToHtml :: WriterOptions
                 -> (Html -> Html)
@@ -575,7 +637,10 @@ tableItemToHtml opts tag' align' item = do
   let attribs = if writerHtml5 opts
                    then A.style (toValue $ "text-align: " ++ alignStr ++ ";")
                    else A.align (toValue alignStr)
-  return $ (tag' ! attribs $ contents) >> nl opts
+  let tag'' = if null alignStr
+                 then tag'
+                 else tag' ! attribs
+  return $ (tag'' $ contents) >> nl opts
 
 toListItems :: WriterOptions -> [Html] -> [Html]
 toListItems opts items = map (toListItem opts) items ++ [nl opts]
@@ -598,6 +663,10 @@ inlineToHtml opts inline =
   case inline of
     (Str str)        -> return $ strToHtml str
     (Space)          -> return $ strToHtml " "
+    (SoftBreak)      -> return $ case writerWrapText opts of
+                                       WrapNone     -> preEscapedString " "
+                                       WrapAuto     -> preEscapedString " "
+                                       WrapPreserve -> preEscapedString "\n"
     (LineBreak)      -> return $ (if writerHtml5 opts then H5.br else H.br)
                                  <> strToHtml "\n"
     (Span (id',classes,kvs) ils)
@@ -641,10 +710,10 @@ inlineToHtml opts inline =
     (RawInline f str)
       | f == Format "html" -> return $ preEscapedString str
       | otherwise          -> return mempty
-    (Link txt (s,_)) | "mailto:" `isPrefixOf` s -> do
+    (Link attr txt (s,_)) | "mailto:" `isPrefixOf` s -> do
                         linkText <- inlineListToHtml opts txt
-                        return $ obfuscateLink opts linkText s
-    (Link txt (s,tit)) -> do
+                        return $ obfuscateLink opts attr linkText s
+    (Link attr txt (s,tit)) -> do
                         linkText <- inlineListToHtml opts txt
                         let s' = case s of
                                       '#':xs | writerSlideVariant opts ==
@@ -654,31 +723,34 @@ inlineToHtml opts inline =
                         let link' = if txt == [Str (unEscapeString s)]
                                        then link ! A.class_ "uri"
                                        else link
+                        let link'' = addAttrs opts attr link'
                         return $ if null tit
-                                    then link'
-                                    else link' ! A.title (toValue tit)
-    (Image txt (s,tit)) | treatAsImage s -> do
+                                    then link''
+                                    else link'' ! A.title (toValue tit)
+    (Image attr txt (s,tit)) | treatAsImage s -> do
+                        let alternate' = stringify txt
                         let attributes = [A.src $ toValue s] ++
-                                         [A.title $ toValue tit | not $ null tit] ++
-                                         [A.alt $ toValue $ stringify txt]
+                                         [A.title $ toValue tit | not (null tit)] ++
+                                         [A.alt $ toValue alternate' | not (null txt)] ++
+                                         imgAttrsToHtml opts attr
                         let tag = if writerHtml5 opts then H5.img else H.img
                         return $ foldl (!) tag attributes
                         -- note:  null title included, as in Markdown.pl
-    (Image _ (s,tit)) -> do
+    (Image attr _ (s,tit)) -> do
                         let attributes = [A.src $ toValue s] ++
-                                         [A.title $ toValue tit | not $ null tit]
+                                         [A.title $ toValue tit | not (null tit)] ++
+                                         imgAttrsToHtml opts attr
                         return $ foldl (!) H5.embed attributes
                         -- note:  null title included, as in Markdown.pl
     (Note contents)
       | writerIgnoreNotes opts -> return mempty
       | otherwise              -> do
-                        st <- get
-                        let notes = stNotes st
+                        notes <- gets stNotes
                         let number = (length notes) + 1
                         let ref = show number
                         htmlContents <- blockListToNote opts ref contents
                         -- push contents onto front of notes
-                        put $ st {stNotes = (htmlContents:notes)}
+                        modify $ \st -> st {stNotes = (htmlContents:notes)}
                         let revealSlash = ['/' | writerSlideVariant opts
                                                  == RevealJsSlides]
                         let link = H.a ! A.href (toValue $ "#" ++
@@ -704,7 +776,7 @@ blockListToNote :: WriterOptions -> String -> [Block] -> State WriterState Html
 blockListToNote opts ref blocks =
   -- If last block is Para or Plain, include the backlink at the end of
   -- that block. Otherwise, insert a new Plain block with the backlink.
-  let backlink = [Link [Str "↩"] ("#" ++ writerIdentifierPrefix opts ++ "fnref" ++ ref,[])]
+  let backlink = [Link nullAttr [Str "↩"] ("#" ++ writerIdentifierPrefix opts ++ "fnref" ++ ref,[])]
       blocks'  = if null blocks
                     then []
                     else let lastBlock   = last blocks
@@ -733,3 +805,41 @@ renderKaTeX = unlines [
   , " katex.render(texText.data, mathElements[i])"
   , "}}"
   ]
+
+isMathEnvironment :: String -> Bool
+isMathEnvironment s = "\\begin{" `isPrefixOf` s &&
+                         envName `elem` mathmlenvs
+  where envName = takeWhile (/= '}') (drop 7 s)
+        mathmlenvs = [ "align"
+                     , "align*"
+                     , "alignat"
+                     , "alignat*"
+                     , "aligned"
+                     , "alignedat"
+                     , "array"
+                     , "Bmatrix"
+                     , "bmatrix"
+                     , "cases"
+                     , "CD"
+                     , "eqnarray"
+                     , "eqnarray*"
+                     , "equation"
+                     , "equation*"
+                     , "gather"
+                     , "gather*"
+                     , "gathered"
+                     , "matrix"
+                     , "multline"
+                     , "multline*"
+                     , "pmatrix"
+                     , "smallmatrix"
+                     , "split"
+                     , "subarray"
+                     , "Vmatrix"
+                     , "vmatrix" ]
+
+allowsMathEnvironments :: HTMLMathMethod -> Bool
+allowsMathEnvironments (MathJax _) = True
+allowsMathEnvironments (MathML _)  = True
+allowsMathEnvironments (WebTeX _)  = True
+allowsMathEnvironments _           = False

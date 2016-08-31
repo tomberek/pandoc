@@ -1,6 +1,7 @@
 _ Test, on linux, windows, mac (inc. website demos)
 
 _ Finalize changelog
+  git log --pretty='format:%n%n* %s (%an)%n%b%n%h%n' --reverse --name-only 1.17.0.3..HEAD > LOG
 
 _ make man/pandoc.1 and commit if needed
 
@@ -16,11 +17,14 @@ _ Generate Mac OSX package.
 
 _ Generate Ubuntu/Debian deb package (cd deb; make package).
 
-- Add release on github (and upload files)
+- Add release on github (use 'make changes_github' and upload files)
 
 _ Upload to HackageDB
 
-_ Update website, including short description of changes
+_ if docs don't build on Hackage:
+  'cabal install neil && neil docs --username=MYUSERNAME'
+
+_ Update website, including short description of changes ('make changes')
 
 _ Announce on pandoc-announce, pandoc-discuss
 

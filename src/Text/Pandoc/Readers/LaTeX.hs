@@ -52,6 +52,7 @@ import Data.List (intercalate)
 import qualified Data.Map as M
 import qualified Control.Exception as E
 import Text.Pandoc.Highlighting (fromListingsLanguage)
+import Text.Pandoc.ImageSize (numUnit, showFl)
 import Text.Pandoc.Error
 
 -- | Parse LaTeX from string and return 'Pandoc' document.
@@ -97,8 +98,13 @@ dimenarg = try $ do
   return $ ch ++ num ++ dim
 
 sp :: LP ()
-sp = skipMany1 $ satisfy (\c -> c == ' ' || c == '\t')
-        <|> try (newline <* lookAhead anyChar <* notFollowedBy blankline)
+sp = whitespace <|> endline
+
+whitespace :: LP ()
+whitespace = skipMany1 $ satisfy (\c -> c == ' ' || c == '\t')
+
+endline :: LP ()
+endline = try (newline >> lookAhead anyChar >> notFollowedBy blankline)
 
 isLowerHex :: Char -> Bool
 isLowerHex x = x >= '0' && x <= '9' || x >= 'a' && x <= 'f'
@@ -124,7 +130,9 @@ comment = do
   return ()
 
 bgroup :: LP ()
-bgroup = () <$ char '{'
+bgroup = try $ do
+  skipMany (spaceChar <|> try (newline <* notFollowedBy blankline))
+  () <$ char '{'
      <|> () <$ controlSeq "bgroup"
      <|> () <$ controlSeq "begingroup"
 
@@ -150,32 +158,54 @@ bracketed :: Monoid a => LP a -> LP a
 bracketed parser = try $ char '[' *> (mconcat <$> manyTill parser (char ']'))
 
 mathChars :: LP String
-mathChars = (concat <$>) $
-  many $
-          many1 (satisfy (\c -> c /= '$' && c /='\\'))
-      <|> (\c -> ['\\',c]) <$> try (char '\\' *> anyChar)
+mathChars =
+  concat <$> many (escapedChar
+               <|> (snd <$> withRaw braced)
+               <|> many1 (satisfy isOrdChar))
+   where escapedChar = try $ do char '\\'
+                                c <- anyChar
+                                return ['\\',c]
+         isOrdChar '$' = False
+         isOrdChar '{' = False
+         isOrdChar '}' = False
+         isOrdChar '\\' = False
+         isOrdChar _ = True
 
 quoted' :: (Inlines -> Inlines) -> LP String -> LP () -> LP Inlines
 quoted' f starter ender = do
   startchs <- starter
-  try ((f . mconcat) <$> manyTill inline ender) <|> lit startchs
+  smart <- getOption readerSmart
+  if smart
+     then do
+       ils <- many (notFollowedBy ender >> inline)
+       (ender >> return (f (mconcat ils))) <|>
+            (<> mconcat ils) <$>
+                    lit (case startchs of
+                              "``"  -> "“"
+                              "`"   -> "‘"
+                              _     -> startchs)
+     else lit startchs
 
 doubleQuote :: LP Inlines
-doubleQuote =
-      quoted' doubleQuoted (try $ string "``") (void $ try $ string "''")
-  <|> quoted' doubleQuoted (string "“")        (void $ char '”')
-  -- the following is used by babel for localized quotes:
-  <|> quoted' doubleQuoted (try $ string "\"`") (void $ try $ string "\"'")
-  <|> quoted' doubleQuoted (string "\"")       (void $ char '"')
+doubleQuote = do
+  quoted' doubleQuoted (try $ string "``") (void $ try $ string "''")
+   <|> quoted' doubleQuoted (string "“")        (void $ char '”')
+   -- the following is used by babel for localized quotes:
+   <|> quoted' doubleQuoted (try $ string "\"`") (void $ try $ string "\"'")
+   <|> quoted' doubleQuoted (string "\"")       (void $ char '"')
 
 singleQuote :: LP Inlines
-singleQuote =
-      quoted' singleQuoted (string "`") (try $ char '\'' >> notFollowedBy letter)
-  <|> quoted' singleQuoted (string "‘") (try $ char '’' >> notFollowedBy letter)
+singleQuote = do
+  smart <- getOption readerSmart
+  if smart
+     then quoted' singleQuoted (string "`") (try $ char '\'' >> notFollowedBy letter)
+      <|> quoted' singleQuoted (string "‘") (try $ char '’' >> notFollowedBy letter)
+     else str <$> many1 (oneOf "`\'‘’")
 
 inline :: LP Inlines
 inline = (mempty <$ comment)
-     <|> (space  <$ sp)
+     <|> (space  <$ whitespace)
+     <|> (softbreak <$ endline)
      <|> inlineText
      <|> inlineCommand
      <|> inlineGroup
@@ -191,7 +221,7 @@ inline = (mempty <$ comment)
      <|> (guardEnabled Ext_literate_haskell *> char '|' *> doLHSverb)
      <|> (str . (:[]) <$> tildeEscape)
      <|> (str . (:[]) <$> oneOf "[]")
-     <|> (str . (:[]) <$> oneOf "#&") -- TODO print warning?
+     <|> (str . (:[]) <$> oneOf "#&~^'`\"[]") -- TODO print warning?
      -- <|> (str <$> count 1 (satisfy (\c -> c /= '\\' && c /='\n' && c /='}' && c /='{'))) -- eat random leftover characters
 
 inlines :: LP Inlines
@@ -378,10 +408,16 @@ inlineCommand = try $ do
   star <- option "" (string "*")
   let name' = name ++ star
   let raw = do
-        rawcommand <- getRawCommand name'
-        parseFromString inlines rawcommand
-
-  lookupListDefault mzero [name',name] inlineCommands
+        rawargs <- withRaw (skipopts *> option "" dimenarg *> many braced)
+        let rawcommand = '\\' : name ++ star ++ snd rawargs
+        transformed <- applyMacros' rawcommand
+        if transformed /= rawcommand
+           then parseFromString inlines transformed
+           else if parseRaw
+                   then return $ rawInline "latex" rawcommand
+                   else return mempty
+  (lookupListDefault mzero [name',name] inlineCommands <*
+      optional (try (string "{}")))
     <|> raw
 
 unlessParseRaw :: LP ()
@@ -389,6 +425,24 @@ unlessParseRaw = getOption readerParseRaw >>= guard . not
 
 isBlockCommand :: String -> Bool
 isBlockCommand s = s `M.member` blockCommands
+
+inlineEnvironments :: M.Map String (LP Inlines)
+inlineEnvironments = M.fromList
+  [ ("displaymath", mathEnv id Nothing "displaymath")
+  , ("math", math <$> verbEnv "math")
+  , ("equation", mathEnv id Nothing "equation")
+  , ("equation*", mathEnv id Nothing "equation*")
+  , ("gather", mathEnv id (Just "gathered") "gather")
+  , ("gather*", mathEnv id (Just "gathered") "gather*")
+  , ("multline", mathEnv id (Just "gathered") "multline")
+  , ("multline*", mathEnv id (Just "gathered") "multline*")
+  , ("eqnarray", mathEnv id (Just "aligned") "eqnarray")
+  , ("eqnarray*", mathEnv id (Just "aligned") "eqnarray*")
+  , ("align", mathEnv id (Just "aligned") "align")
+  , ("align*", mathEnv id (Just "aligned") "align*")
+  , ("alignat", mathEnv id (Just "aligned") "alignat")
+  , ("alignat*", mathEnv id (Just "aligned") "alignat*")
+  ]
 
 inlineCommands :: M.Map String (LP Inlines)
 inlineCommands = M.fromList $
@@ -483,10 +537,12 @@ inlineCommands = M.fromList $
   , ("href", (unescapeURL <$> braced <* optional sp) >>= \url ->
        tok >>= \lab ->
          pure (link url "" lab))
-  , ("includegraphics", skipopts *> (unescapeURL <$> braced) >>= mkImage)
+  , ("includegraphics", do options <- option [] keyvals
+                           src <- unescapeURL . removeDoubleQuotes <$> braced
+                           mkImage options src)
   , ("enquote", enquote)
-  , ("cite", citation "cite" AuthorInText False)
-  , ("Cite", citation "cite" AuthorInText False)
+  , ("cite", citation "cite" NormalCitation False)
+  , ("Cite", citation "Cite" NormalCitation False)
   , ("citep", citation "citep" NormalCitation False)
   , ("citep*", citation "citep*" NormalCitation False)
   , ("citeal", citation "citeal" NormalCitation False)
@@ -545,14 +601,19 @@ inlineCommands = M.fromList $
   -- in which case they will appear as raw latex blocks:
   [ "index" ]
 
-mkImage :: String -> LP Inlines
-mkImage src = do
+mkImage :: [(String, String)] -> String -> LP Inlines
+mkImage options src = do
+   let replaceTextwidth (k,v) = case numUnit v of
+                                  Just (num, "\\textwidth") -> (k, showFl (num * 100) ++ "%")
+                                  _ -> (k, v)
+   let kvs = map replaceTextwidth $ filter (\(k,_) -> k `elem` ["width", "height"]) options
+   let attr = ("",[], kvs)
    let alt = str "image"
    case takeExtension src of
         "" -> do
               defaultExt <- getOption readerDefaultImageExtension
-              return $ image (addExtension src defaultExt) "" alt
-        _  -> return $ image src "" alt
+              return $ imageWith attr (addExtension src defaultExt) "" alt
+        _  -> return $ imageWith attr src "" alt
 
 inNote :: Inlines -> Inlines
 inNote ils =
@@ -780,8 +841,14 @@ tok = try $ grouped inline <|> inlineCommand <|> str <$> count 1 inlineChar
 opt :: LP Inlines
 opt = bracketed inline
 
+rawopt :: LP String
+rawopt = do
+  contents <- bracketed (many1 (noneOf "]") <|> try (string "\\]"))
+  optional sp
+  return $ "[" ++ contents ++ "]"
+
 skipopts :: LP ()
-skipopts = skipMany (opt *> optional sp)
+skipopts = skipMany rawopt
 
 inlineText :: LP Inlines
 inlineText = str <$> many1 inlineChar
@@ -798,9 +865,13 @@ environment = do
 
 rawEnv :: String -> LP Blocks
 rawEnv name = do
-  let addBegin x = "\\begin{" ++ name ++ "}" ++ x
   parseRaw <- getOption readerParseRaw
-  env name blocks
+  rawOptions <- mconcat <$> many rawopt
+  let addBegin x = "\\begin{" ++ name ++ "}" ++ rawOptions ++ x
+  if parseRaw
+     then (rawBlock "latex" . addBegin) <$>
+            (withRaw (env name blocks) >>= applyMacros' . snd)
+     else env name blocks
 
 ----
 
@@ -924,7 +995,7 @@ readFileFromDirs (d:ds) f =
 keyval :: LP (String, String)
 keyval = try $ do
   key <- many1 alphaNum
-  val <- option "" $ char '=' >> many1 alphaNum
+  val <- option "" $ char '=' >> many1 (alphaNum <|> char '.' <|> char '\\')
   skipMany spaceChar
   optional (char ',')
   skipMany spaceChar
@@ -946,11 +1017,11 @@ rawLaTeXBlock = snd <$> try (withRaw (environment <|> blockCommand))
 
 addImageCaption :: Blocks -> LP Blocks
 addImageCaption = walkM go
-  where go (Image alt (src,tit)) = do
+  where go (Image attr alt (src,tit)) = do
           mbcapt <- stateCaption <$> getState
           return $ case mbcapt of
-               Just ils -> Image (toList ils) (src, "fig:")
-               Nothing  -> Image alt (src,tit)
+               Just ils -> Image attr (toList ils) (src, "fig:")
+               Nothing  -> Image attr alt (src,tit)
         go x = return x
 
 addTableCaption :: Blocks -> LP Blocks
@@ -1162,7 +1233,7 @@ citationLabel  = optional sp *>
           <* optional sp
           <* optional (char ',')
           <* optional sp)
-  where isBibtexKeyChar c = isAlphaNum c || c `elem` (".:;?!`'()/*@_+=-[]*" :: String)
+  where isBibtexKeyChar c = isAlphaNum c || c `elem` (".:;?!`'()/*@_+=-[]" :: String)
 
 cites :: CitationMode -> Bool -> LP [Citation]
 cites mode multi = try $ do
@@ -1283,3 +1354,10 @@ endInclude = do
   co <- braced
   setPosition $ newPos fn (fromMaybe 1 $ safeRead ln) (fromMaybe 1 $ safeRead co)
   return mempty
+
+removeDoubleQuotes :: String -> String
+removeDoubleQuotes ('"':xs) =
+  case reverse xs of
+       '"':ys -> reverse ys
+       _      -> '"':xs
+removeDoubleQuotes xs = xs

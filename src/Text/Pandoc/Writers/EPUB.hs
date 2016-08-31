@@ -31,6 +31,7 @@ Conversion of 'Pandoc' documents to EPUB.
 module Text.Pandoc.Writers.EPUB ( writeEPUB ) where
 import Data.IORef ( IORef, newIORef, readIORef, modifyIORef )
 import qualified Data.Map as M
+import qualified Data.Set as Set
 import Data.Maybe ( fromMaybe, catMaybes )
 import Data.List ( isPrefixOf, isInfixOf, intercalate )
 import System.Environment ( getEnv )
@@ -50,6 +51,7 @@ import Text.Pandoc.Shared ( renderTags', safeRead, uniqueIdent, trim
 import qualified Text.Pandoc.Shared as S (Element(..))
 import Text.Pandoc.Builder (fromList, setMeta)
 import Text.Pandoc.Options ( WriterOptions(..)
+                           , WrapOption(..)
                            , HTMLMathMethod(..)
                            , EPUBVersion(..)
                            , ObfuscationMethod(NoObfuscation) )
@@ -350,7 +352,7 @@ writeEPUB opts doc@(Pandoc meta _) = do
                        if epub3
                           then MathML Nothing
                           else writerHTMLMathMethod opts
-                  , writerWrapText = True }
+                  , writerWrapText = WrapAuto }
   metadata <- getEPUBMetadata opts' meta
 
   -- cover page
@@ -455,10 +457,10 @@ writeEPUB opts doc@(Pandoc meta _) = do
                           chapters' [1..]
 
   let fixInternalReferences :: Inline -> Inline
-      fixInternalReferences (Link lab ('#':xs, tit)) =
+      fixInternalReferences (Link attr lab ('#':xs, tit)) =
         case lookup xs reftable of
-             Just ys ->  Link lab (ys, tit)
-             Nothing -> Link lab ('#':xs, tit)
+             Just ys -> Link attr lab (ys, tit)
+             Nothing -> Link attr lab ('#':xs, tit)
       fixInternalReferences x = x
 
   -- internal reference IDs change when we chunk the file,
@@ -665,7 +667,8 @@ writeEPUB opts doc@(Pandoc meta _) = do
                             ]
                           ]
                      else []
-  let navData = renderHtml $ writeHtml opts'
+  let navData = renderHtml $ writeHtml
+                      opts'{ writerVariables = ("navpage","true"):vars }
             (Pandoc (setMeta "title"
                      (walk removeNote $ fromList $ docTitle' meta) nullMeta)
                (navBlocks ++ landmarks))
@@ -870,14 +873,14 @@ transformInline  :: WriterOptions
                  -> IORef [(FilePath, (FilePath, Maybe Entry))] -- ^ (oldpath, newpath) media
                  -> Inline
                  -> IO Inline
-transformInline opts mediaRef (Image lab (src,tit)) = do
+transformInline opts mediaRef (Image attr lab (src,tit)) = do
     newsrc <- modifyMediaRef opts mediaRef src
-    return $ Image lab (newsrc, tit)
+    return $ Image attr lab (newsrc, tit)
 transformInline opts mediaRef (x@(Math t m))
   | WebTeX url <- writerHTMLMathMethod opts = do
     newsrc <- modifyMediaRef opts mediaRef (url ++ urlEncode m)
     let mathclass = if t == DisplayMath then "display" else "inline"
-    return $ Span ("",["math",mathclass],[]) [Image [x] (newsrc, "")]
+    return $ Span ("",["math",mathclass],[]) [Image nullAttr [x] (newsrc, "")]
 transformInline opts mediaRef  (RawInline fmt raw)
   | fmt == Format "html" = do
   let tags = parseTags raw
@@ -885,7 +888,7 @@ transformInline opts mediaRef  (RawInline fmt raw)
   return $ RawInline fmt (renderTags' tags')
 transformInline _ _ x = return x
 
-(!) :: Node t => (t -> Element) -> [(String, String)] -> t -> Element
+(!) :: (t -> Element) -> [(String, String)] -> t -> Element
 (!) f attrs n = add_attrs (map (\(k,v) -> Attr (unqual k) v) attrs) (f n)
 
 -- | Version of 'ppTopElement' that specifies UTF-8 encoding.
@@ -915,13 +918,13 @@ showChapter = printf "ch%03d.xhtml"
 
 -- Add identifiers to any headers without them.
 addIdentifiers :: [Block] -> [Block]
-addIdentifiers bs = evalState (mapM go bs) []
+addIdentifiers bs = evalState (mapM go bs) Set.empty
  where go (Header n (ident,classes,kvs) ils) = do
          ids <- get
          let ident' = if null ident
                          then uniqueIdent ils ids
                          else ident
-         put $ ident' : ids
+         modify $ Set.insert ident'
          return $ Header n (ident',classes,kvs) ils
        go x = return x
 

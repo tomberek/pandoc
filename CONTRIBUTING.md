@@ -29,7 +29,7 @@ Out of scope?
 -------------
 
 A less than perfect conversion does not necessarily mean there's
-a bug in pandoc.  Quoting from the README:
+a bug in pandoc.  Quoting from the MANUAL:
 
 > Because Pandoc's intermediate representation of a document is less
 > expressive than many of the formats it converts between, one should
@@ -124,7 +124,7 @@ Please follow these guidelines:
     below under [Tests](#tests).)  If you are adding a new writer or reader,
     you must include tests.
 
-7.  If you are adding a new feature, include updates to the README.
+7.  If you are adding a new feature, include updates to the README and MANUAL.
 
 8.  All code must be released under the general license governing pandoc
     (GPL v2).
@@ -145,21 +145,40 @@ Tests
 
 Tests can be run as follows:
 
+    cabal install --only-dependencies --enable-tests
     cabal configure --enable-tests
     cabal build
     cabal test
 
+or, if you're using [stack],
+
+    stack init
+    stack test
+
 The test program is `tests/test-pandoc.hs`.
 
-Benchmarks can be enabled by passing the `--enable-benchmarks` flag
-to `cabal configure`, and run using `cabal bench`.
+Benchmarks
+----------
+
+To run benchmarks with cabal:
+
+    cabal configure --enable-benchmarks
+    cabal build
+    cabal bench
+
+With stack:
+
+    stack bench
 
 Using the REPL
 --------------
 
 With a recent version of cabal, you can do `cabal repl` and get
-a ghci REPL for working with pandoc.  We recommend using the following
-`.ghci` file (which can be placed in the source directory):
+a ghci REPL for working with pandoc.  With [stack], use
+`cabal ghci`.
+
+We recommend using the following `.ghci` file (which can be
+placed in the source directory):
 
 ```
 :set -fobject-code
@@ -240,7 +259,7 @@ The library is structured as follows:
   - `Text.Pandoc.Shared` is a grab-bag of shared utility functions.
   - `Text.Pandoc.Writers.Shared` contains utilities used in writers only.
   - `Text.Pandoc.Slides` contains functions for splitting a markdown document
-    into slides, using the conventions described in the README.
+    into slides, using the conventions described in the MANUAL.
   - `Text.Pandoc.Templates` defines pandoc's templating system.
   - `Text.Pandoc.UTF8` contains functions for converting text to and from
     UTF8 bytestrings (strict and lazy).
@@ -251,7 +270,7 @@ The library is structured as follows:
 
 [pandoc-discuss]: http://groups.google.com/group/pandoc-discuss
 [issue tracker]: https://github.com/jgm/pandoc/issues
-[User's Guide]: http://pandoc.org/README.html
+[User's Guide]: http://pandoc.org/MANUAL.html
 [FAQs]:  http://pandoc.org/faqs.html
 [EditorConfig]: http://editorconfig.org/
 [Haskell platform]: http://www.haskell.org/platform/
@@ -266,3 +285,5 @@ The library is structured as follows:
 [inprogress]: https://github.com/jgm/pandoc/labels/inprogress
 [more discussion needed]: https://github.com/jgm/pandoc/labels/More%20discussion%20needed
 [more info needed]: https://github.com/jgm/pandoc/labels/More%20info%20needed
+[stack]: https://github.com/commercialhaskell/stack
+

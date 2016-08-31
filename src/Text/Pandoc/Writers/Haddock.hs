@@ -57,7 +57,7 @@ writeHaddock opts document =
 -- | Return haddock representation of document.
 pandocToHaddock :: WriterOptions -> Pandoc -> State WriterState String
 pandocToHaddock opts (Pandoc meta blocks) = do
-  let colwidth = if writerWrapText opts
+  let colwidth = if writerWrapText opts == WrapAuto
                     then Just $ writerColumns opts
                     else Nothing
   body <- blockListToHaddock opts blocks
@@ -103,8 +103,8 @@ blockToHaddock opts (Plain inlines) = do
   contents <- inlineListToHaddock opts inlines
   return $ contents <> cr
 -- title beginning with fig: indicates figure
-blockToHaddock opts (Para [Image alt (src,'f':'i':'g':':':tit)]) =
-  blockToHaddock opts (Para [Image alt (src,tit)])
+blockToHaddock opts (Para [Image attr alt (src,'f':'i':'g':':':tit)]) =
+  blockToHaddock opts (Para [Image attr alt (src,tit)])
 blockToHaddock opts (Para inlines) =
   -- TODO:  if it contains linebreaks, we need to use a @...@ block
   (<> blankline) `fmap` blockToHaddock opts (Plain inlines)
@@ -325,18 +325,23 @@ inlineToHaddock _ (RawInline f str)
   | otherwise = return empty
 -- no line break in haddock (see above on CodeBlock)
 inlineToHaddock _ (LineBreak) = return cr
+inlineToHaddock opts SoftBreak =
+  case writerWrapText opts of
+       WrapAuto     -> return space
+       WrapNone     -> return space
+       WrapPreserve -> return cr
 inlineToHaddock _ Space = return space
 inlineToHaddock opts (Cite _ lst) = inlineListToHaddock opts lst
-inlineToHaddock opts (Link txt (src, _)) = do
-  linktext <- inlineListToHaddock opts txt
+inlineToHaddock _ (Link _ txt (src, _)) = do
+  let linktext = text $ escapeString $ stringify txt
   let useAuto = isURI src &&
                 case txt of
                       [Str s] | escapeURI s == src -> True
                       _                            -> False
   return $ nowrap $ "<" <> text src <>
            (if useAuto then empty else space <> linktext) <> ">"
-inlineToHaddock opts (Image alternate (source, tit)) = do
-  linkhaddock <- inlineToHaddock opts (Link alternate (source, tit))
+inlineToHaddock opts (Image attr alternate (source, tit)) = do
+  linkhaddock <- inlineToHaddock opts (Link attr alternate (source, tit))
   return $ "<" <> linkhaddock <> ">"
 -- haddock doesn't have notes, but we can fake it:
 inlineToHaddock opts (Note contents) = do

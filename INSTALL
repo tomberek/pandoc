@@ -8,10 +8,36 @@ There are also binary installers for Windows and Mac OS X.
 If you are installing the development version from github, see also:
 https://github.com/jgm/pandoc/wiki/Installing-the-development-version-of-pandoc
 
+How to get the source
+---------------------
+
+Source tarballs can be found at
+<https://hackage.haskell.org/package/pandoc>.  The tarball
+for a particular version `VERSION` can be found at
+
+    https://hackage.haskell.org/package/pandoc-VERSION/pandoc-VERSION.tar.gz
+
+**Do not use the automatically generated tarball that can be
+downloaded from pandoc's GitHub releases page.**  It does not
+include some essential template files, which come from a GitHub
+submodule.
+
+If you want the latest development code, you can fetch it
+by cloning the repository:
+
+    git clone https://github.com/jgm/pandoc
+    cd pandoc
+    git submodule update --init   # to fetch the templates
+
+Note:  there may be times when the development code is broken
+or depends on other libraries which must be installed
+separately.  Unless you really know what you're doing, install
+the last released version.
+
 Quick install with stack
 ------------------------
 
-1.  Install [stack](https://github.com/commercialhaskell/stack/wiki/Downloads).
+1.  Install [stack](http://docs.haskellstack.org/en/stable/install_and_upgrade.html).
 
 2.  If you used git to get the pandoc source (as opposed to unpacking
     a release tarball), do
@@ -95,7 +121,7 @@ Quick install with cabal
 
 The `pandoc.1` man page will be installed automatically.  cabal shows
 you where it is installed: you may need to set your `MANPATH`
-accordingly. If `README` has been modified, the man page can be
+accordingly. If `MANUAL.txt` has been modified, the man page can be
 rebuilt: `make man/pandoc.1`.
 
 The `pandoc-citeproc.1` man page will also be installed automatically.
@@ -179,6 +205,10 @@ can be run from any directory and is completely self-contained.
 
 You can find the pandoc executable in `dist/build/pandoc`.  Copy this wherever
 you please.
+
+Or alternatively with `stack`:
+
+    stack install pandoc --flag pandoc:embed_data_files
 
 [zip-archive]: http://hackage.haskell.org/package/zip-archive
 [highlighting-kate]: http://hackage.haskell.org/package/highlighting-kate

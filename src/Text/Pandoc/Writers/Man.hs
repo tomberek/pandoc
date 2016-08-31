@@ -40,7 +40,6 @@ import Data.Maybe (fromMaybe)
 import Text.Pandoc.Pretty
 import Text.Pandoc.Builder (deleteMeta)
 import Control.Monad.State
-import Data.Char ( isDigit )
 
 type Notes = [[Block]]
 data WriterState = WriterState { stNotes  :: Notes
@@ -53,7 +52,7 @@ writeMan opts document = evalState (pandocToMan opts document) (WriterState [] F
 -- | Return groff man representation of document.
 pandocToMan :: WriterOptions -> Pandoc -> State WriterState String
 pandocToMan opts (Pandoc meta blocks) = do
-  let colwidth = if writerWrapText opts
+  let colwidth = if writerWrapText opts == WrapAuto
                     then Just $ writerColumns opts
                     else Nothing
   let render' = render colwidth
@@ -61,10 +60,11 @@ pandocToMan opts (Pandoc meta blocks) = do
   let title' = render' titleText
   let setFieldsFromTitle =
        case break (== ' ') title' of
-           (cmdName, rest) -> case reverse cmdName of
-                                   (')':d:'(':xs) | isDigit d ->
-                                     defField "title" (reverse xs) .
-                                     defField "section" [d] .
+           (cmdName, rest) -> case break (=='(') cmdName of
+                                   (xs, '(':ys) | not (null ys) &&
+                                                  last ys == ')' ->
+                                     defField "title" xs .
+                                     defField "section" (init ys) .
                                      case splitBy (=='|') rest of
                                           (ft:hds) ->
                                             defField "footer" (trim ft) .
@@ -145,6 +145,7 @@ breakSentence xs =
            []             -> (as, [])
            [c]            -> (as ++ [c], [])
            (c:Space:cs)   -> (as ++ [c], cs)
+           (c:SoftBreak:cs) -> (as ++ [c], cs)
            (Str ".":Str (')':ys):cs) -> (as ++ [Str ".", Str (')':ys)], cs)
            (x@(Str ('.':')':_)):cs) -> (as ++ [x], cs)
            (LineBreak:x@(Str ('.':_)):cs) -> (as ++[LineBreak], x:cs)
@@ -337,8 +338,9 @@ inlineToMan _ (RawInline f str)
   | otherwise         = return empty
 inlineToMan _ (LineBreak) = return $
   cr <> text ".PD 0" $$ text ".P" $$ text ".PD" <> cr
+inlineToMan _ SoftBreak = return space
 inlineToMan _ Space = return space
-inlineToMan opts (Link txt (src, _)) = do
+inlineToMan opts (Link _ txt (src, _)) = do
   linktext <- inlineListToMan opts txt
   let srcSuffix = fromMaybe src (stripPrefix "mailto:" src)
   return $ case txt of
@@ -346,12 +348,12 @@ inlineToMan opts (Link txt (src, _)) = do
              | escapeURI s == srcSuffix ->
                                  char '<' <> text srcSuffix <> char '>'
            _                  -> linktext <> text " (" <> text src <> char ')'
-inlineToMan opts (Image alternate (source, tit)) = do
+inlineToMan opts (Image attr alternate (source, tit)) = do
   let txt = if (null alternate) || (alternate == [Str ""]) ||
                (alternate == [Str source]) -- to prevent autolinks
                then [Str "image"]
                else alternate
-  linkPart <- inlineToMan opts (Link txt (source, tit))
+  linkPart <- inlineToMan opts (Link attr txt (source, tit))
   return $ char '[' <> text "IMAGE: " <> linkPart <> char ']'
 inlineToMan _ (Note contents) = do
   -- add to notes in state

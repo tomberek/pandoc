@@ -2,7 +2,7 @@
     FlexibleContexts, ScopedTypeVariables, PatternGuards,
     ViewPatterns #-}
 {-
-Copyright (C) 2006-2015 John MacFarlane <jgm@berkeley.edu>
+Copyright (C) 2006-2016 John MacFarlane <jgm@berkeley.edu>
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -21,7 +21,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
 {- |
    Module      : Text.Pandoc.Shared
-   Copyright   : Copyright (C) 2006-2015 John MacFarlane
+   Copyright   : Copyright (C) 2006-2016 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -79,6 +79,8 @@ module Text.Pandoc.Shared (
                      warn,
                      mapLeft,
                      hush,
+                     -- * for squashing blocks
+                     blocksToInlines,
                      -- * Safe read
                      safeRead,
                      -- * Version
@@ -98,8 +100,9 @@ import Data.Char ( toLower, isLower, isUpper, isAlpha,
                    isLetter, isDigit, isSpace, isAscii, isAlphaNum )
 import Data.List ( find, stripPrefix, intercalate )
 import qualified Data.Map as M
-import Network.URI ( escapeURIString, isURI, nonStrictRelativeTo,
-                     unEscapeString, parseURIReference, isAllowedInURI )
+import Network.URI ( escapeURIString, nonStrictRelativeTo,
+                     unEscapeString, parseURIReference, isAllowedInURI,
+                     parseURI, URI(..) )
 import qualified Data.Set as Set
 import System.Directory
 import Text.Pandoc.MIME (MimeType, getMimeType)
@@ -123,11 +126,33 @@ import qualified Data.ByteString.Lazy as BL
 import Paths_pandoc (version)
 
 import Text.Pandoc.Data (dataFiles)
+#else
+import Paths_pandoc (getDataFileName)
+#endif
+#ifdef HTTP_CLIENT
+import Network.HTTP.Client (httpLbs, responseBody, responseHeaders,
+                            Request(port,host))
+#if MIN_VERSION_http_client(0,4,30)
+import Network.HTTP.Client (parseRequest)
+#else
+import Network.HTTP.Client (parseUrl)
+#endif
+#if MIN_VERSION_http_client(0,4,18)
+import Network.HTTP.Client (newManager)
+#else
+import Network.HTTP.Client (withManager)
+#endif
+import Network.HTTP.Client.Internal (addProxy)
+import Network.HTTP.Client.TLS (tlsManagerSettings)
+import System.Environment (getEnv)
+import Network.HTTP.Types.Header ( hContentType)
+import Network (withSocketsDo)
+#else
 import Network.URI (parseURI)
 
 -- | Version number of pandoc library.
 pandocVersion :: String
-pandocVersion = "1.15.2"
+pandocVersion = "1.17.2"
 
 --
 -- List processing
@@ -275,18 +300,24 @@ tabFilter tabStop =
 -- Date/time
 --
 
--- | Parse a date and convert (if possible) to "YYYY-MM-DD" format.
+-- | Parse a date and convert (if possible) to "YYYY-MM-DD" format. We
+-- limit years to the range 1601-9999 (ISO 8601 accepts greater than
+-- or equal to 1583, but MS Word only accepts dates starting 1601).
 normalizeDate :: String -> Maybe String
 normalizeDate s = fmap (formatTime defaultTimeLocale "%F")
-  (msum $ map (\fs -> parsetimeWith fs s) formats :: Maybe Day)
-   where parsetimeWith =
+  (msum $ map (\fs -> parsetimeWith fs s >>= rejectBadYear) formats :: Maybe Day)
+  where rejectBadYear day = case toGregorian day of
+          (y, _, _) | y >= 1601 && y <= 9999 -> Just day
+          _ -> Nothing
+        parsetimeWith =
 #if MIN_VERSION_time(1,5,0)
              parseTimeM True defaultTimeLocale
 #else
              parseTime defaultTimeLocale
 #endif
-         formats = ["%x","%m/%d/%Y", "%D","%F", "%d %b %Y",
-                    "%d %B %Y", "%b. %d, %Y", "%B %d, %Y", "%Y"]
+        formats = ["%x","%m/%d/%Y", "%D","%F", "%d %b %Y",
+                    "%d %B %Y", "%b. %d, %Y", "%B %d, %Y",
+                    "%Y%m%d", "%Y%m", "%Y"]
 
 --
 -- Pandoc block and inline list processing
@@ -332,17 +363,19 @@ isSpaceOrEmpty (Str "") = True
 isSpaceOrEmpty _ = False
 
 -- | Extract the leading and trailing spaces from inside an inline element
--- and place them outside the element.
-
+-- and place them outside the element.  SoftBreaks count as Spaces for
+-- these purposes.
 extractSpaces :: (Inlines -> Inlines) -> Inlines -> Inlines
 extractSpaces f is =
   let contents = B.unMany is
       left  = case viewl contents of
-                    (Space :< _) -> B.space
-                    _            -> mempty
+                    (Space :< _)     -> B.space
+                    (SoftBreak :< _) -> B.softbreak
+                    _                -> mempty
       right = case viewr contents of
-                    (_ :> Space) -> B.space
-                    _            -> mempty in
+                    (_ :> Space)     -> B.space
+                    (_ :> SoftBreak) -> B.softbreak
+                    _                -> mempty in
   (left <> f (B.trimInlines . B.Many $ contents) <> right)
 
 -- | Normalize @Pandoc@ document, consolidating doubled 'Space's,
@@ -409,6 +442,8 @@ normalizeInlines (Str x : ys) =
      isStr _       = False
      fromStr (Str z) = z
      fromStr _       = error "normalizeInlines - fromStr - not a Str"
+normalizeInlines (Space : SoftBreak : ys) =
+  SoftBreak : normalizeInlines ys
 normalizeInlines (Space : ys) =
   if null rest
      then []
@@ -481,10 +516,10 @@ normalizeInlines (Note bs : ys) = Note (normalizeBlocks bs) :
   normalizeInlines ys
 normalizeInlines (Quoted qt ils : ys) =
   Quoted qt (normalizeInlines ils) : normalizeInlines ys
-normalizeInlines (Link ils t : ys) =
-  Link (normalizeInlines ils) t : normalizeInlines ys
-normalizeInlines (Image ils t : ys) =
-  Image (normalizeInlines ils) t : normalizeInlines ys
+normalizeInlines (Link attr ils t : ys) =
+  Link attr (normalizeInlines ils) t : normalizeInlines ys
+normalizeInlines (Image attr ils t : ys) =
+  Image attr (normalizeInlines ils) t : normalizeInlines ys
 normalizeInlines (Cite cs ils : ys) =
   Cite cs (normalizeInlines ils) : normalizeInlines ys
 normalizeInlines (x : xs) = x : normalizeInlines xs
@@ -496,6 +531,7 @@ removeFormatting = query go . walk deNote
   where go :: Inline -> [Inline]
         go (Str xs)     = [Str xs]
         go Space        = [Space]
+        go SoftBreak    = [SoftBreak]
         go (Code _ x)   = [Str x]
         go (Math _ x)   = [Str x]
         go LineBreak    = [Space]
@@ -510,6 +546,7 @@ stringify :: Walkable Inline a => a -> String
 stringify = query go . walk deNote
   where go :: Inline -> [Char]
         go Space = " "
+        go SoftBreak = " "
         go (Str x) = x
         go (Code _ x) = x
         go (Math _ x) = x
@@ -657,14 +694,14 @@ headerLtEq _ _ = False
 
 -- | Generate a unique identifier from a list of inlines.
 -- Second argument is a list of already used identifiers.
-uniqueIdent :: [Inline] -> [String] -> String
+uniqueIdent :: [Inline] -> Set.Set String -> String
 uniqueIdent title' usedIdents
   =  let baseIdent = case inlineListToIdentifier title' of
                         ""   -> "section"
                         x    -> x
          numIdent n = baseIdent ++ "-" ++ show n
-     in  if baseIdent `elem` usedIdents
-           then case find (\x -> numIdent x `notElem` usedIdents) ([1..60000] :: [Int]) of
+     in  if baseIdent `Set.member` usedIdents
+           then case find (\x -> not $ numIdent x `Set.member` usedIdents) ([1..60000] :: [Int]) of
                   Just x  -> numIdent x
                   Nothing -> baseIdent   -- if we have more than 60,000, allow repeats
            else baseIdent
@@ -723,6 +760,212 @@ renderTags' = renderTagsOptions
               where matchTags = \tags -> flip elem tags . map toLower
 
 --
+-- File handling
+--
+
+-- | Perform an IO action in a directory, returning to starting directory.
+inDirectory :: FilePath -> IO a -> IO a
+inDirectory path action = E.bracket
+                             getCurrentDirectory
+                             setCurrentDirectory
+                             (const $ setCurrentDirectory path >> action)
+
+getDefaultReferenceDocx :: Maybe FilePath -> IO Archive
+getDefaultReferenceDocx datadir = do
+  let paths = ["[Content_Types].xml",
+               "_rels/.rels",
+               "docProps/app.xml",
+               "docProps/core.xml",
+               "word/document.xml",
+               "word/fontTable.xml",
+               "word/footnotes.xml",
+               "word/numbering.xml",
+               "word/settings.xml",
+               "word/webSettings.xml",
+               "word/styles.xml",
+               "word/_rels/document.xml.rels",
+               "word/_rels/footnotes.xml.rels",
+               "word/theme/theme1.xml"]
+  let toLazy = fromChunks . (:[])
+  let pathToEntry path = do epochtime <- (floor . utcTimeToPOSIXSeconds) <$>
+                                          getCurrentTime
+                            contents <- toLazy <$> readDataFile datadir
+                                                       ("docx/" ++ path)
+                            return $ toEntry path epochtime contents
+  mbArchive <- case datadir of
+                    Nothing   -> return Nothing
+                    Just d    -> do
+                       exists <- doesFileExist (d </> "reference.docx")
+                       if exists
+                          then return (Just (d </> "reference.docx"))
+                          else return Nothing
+  case mbArchive of
+     Just arch -> toArchive <$> BL.readFile arch
+     Nothing   -> foldr addEntryToArchive emptyArchive <$>
+                     mapM pathToEntry paths
+
+getDefaultReferenceODT :: Maybe FilePath -> IO Archive
+getDefaultReferenceODT datadir = do
+  let paths = ["mimetype",
+               "manifest.rdf",
+               "styles.xml",
+               "content.xml",
+               "meta.xml",
+               "settings.xml",
+               "Configurations2/accelerator/current.xml",
+               "Thumbnails/thumbnail.png",
+               "META-INF/manifest.xml"]
+  let pathToEntry path = do epochtime <- floor `fmap` getPOSIXTime
+                            contents <- (fromChunks . (:[])) `fmap`
+                                          readDataFile datadir ("odt/" ++ path)
+                            return $ toEntry path epochtime contents
+  mbArchive <- case datadir of
+                    Nothing   -> return Nothing
+                    Just d    -> do
+                       exists <- doesFileExist (d </> "reference.odt")
+                       if exists
+                          then return (Just (d </> "reference.odt"))
+                          else return Nothing
+  case mbArchive of
+     Just arch -> toArchive <$> BL.readFile arch
+     Nothing   -> foldr addEntryToArchive emptyArchive <$>
+                     mapM pathToEntry paths
+
+
+readDefaultDataFile :: FilePath -> IO BS.ByteString
+readDefaultDataFile "reference.docx" =
+  (BS.concat . toChunks . fromArchive) <$> getDefaultReferenceDocx Nothing
+readDefaultDataFile "reference.odt" =
+  (BS.concat . toChunks . fromArchive) <$> getDefaultReferenceODT Nothing
+readDefaultDataFile fname =
+#ifdef EMBED_DATA_FILES
+  case lookup (makeCanonical fname) dataFiles of
+    Nothing       -> err 97 $ "Could not find data file " ++ fname
+    Just contents -> return contents
+  where makeCanonical = Posix.joinPath . transformPathParts . splitDirectories
+        transformPathParts = reverse . foldl go []
+        go as     "."  = as
+        go (_:as) ".." = as
+        go as     x    = x : as
+#else
+  getDataFileName fname' >>= checkExistence >>= BS.readFile
+    where fname' = if fname == "MANUAL.txt" then fname else "data" </> fname
+
+checkExistence :: FilePath -> IO FilePath
+checkExistence fn = do
+  exists <- doesFileExist fn
+  if exists
+     then return fn
+     else err 97 ("Could not find data file " ++ fn)
+#endif
+
+-- | Read file from specified user data directory or, if not found there, from
+-- Cabal data directory.
+readDataFile :: Maybe FilePath -> FilePath -> IO BS.ByteString
+readDataFile Nothing fname = readDefaultDataFile fname
+readDataFile (Just userDir) fname = do
+  exists <- doesFileExist (userDir </> fname)
+  if exists
+     then BS.readFile (userDir </> fname)
+     else readDefaultDataFile fname
+
+-- | Same as 'readDataFile' but returns a String instead of a ByteString.
+readDataFileUTF8 :: Maybe FilePath -> FilePath -> IO String
+readDataFileUTF8 userDir fname =
+  UTF8.toString `fmap` readDataFile userDir fname
+
+-- | Specialized version of parseURIReference that disallows
+-- single-letter schemes.  Reason:  these are usually windows absolute
+-- paths.
+parseURIReference' :: String -> Maybe URI
+parseURIReference' s =
+  case parseURIReference s of
+       Just u
+         | length (uriScheme u) > 2  -> Just u
+         | null (uriScheme u)        -> Just u  -- protocol-relative
+       _                             -> Nothing
+
+-- | Fetch an image or other item from the local filesystem or the net.
+-- Returns raw content and maybe mime type.
+fetchItem :: Maybe String -> String
+          -> IO (Either E.SomeException (BS.ByteString, Maybe MimeType))
+fetchItem sourceURL s =
+  case (sourceURL >>= parseURIReference' . ensureEscaped, ensureEscaped s) of
+       (Just u, s') -> -- try fetching from relative path at source
+          case parseURIReference' s' of
+               Just u' -> openURL $ show $ u' `nonStrictRelativeTo` u
+               Nothing -> openURL s' -- will throw error
+       (Nothing, s') ->
+          case parseURI s' of  -- requires absolute URI
+               -- We don't want to treat C:/ as a scheme:
+               Just u' | length (uriScheme u') > 2 -> openURL (show u')
+               Just u' | uriScheme u' == "file:" ->
+                    E.try $ readLocalFile $ dropWhile (=='/') (uriPath u')
+               _ -> E.try $ readLocalFile fp -- get from local file system
+  where readLocalFile f = do
+          cont <- BS.readFile f
+          return (cont, mime)
+        dropFragmentAndQuery = takeWhile (\c -> c /= '?' && c /= '#')
+        fp = unEscapeString $ dropFragmentAndQuery s
+        mime = case takeExtension fp of
+                    ".gz" -> getMimeType $ dropExtension fp
+                    ".svgz" -> getMimeType $ dropExtension fp ++ ".svg"
+                    x     -> getMimeType x
+        ensureEscaped = escapeURIString isAllowedInURI . map convertSlash
+        convertSlash '\\' = '/'
+        convertSlash x    = x
+
+-- | Like 'fetchItem', but also looks for items in a 'MediaBag'.
+fetchItem' :: MediaBag -> Maybe String -> String
+           -> IO (Either E.SomeException (BS.ByteString, Maybe MimeType))
+fetchItem' media sourceURL s = do
+  case lookupMedia s media of
+       Nothing -> fetchItem sourceURL s
+       Just (mime, bs) -> return $ Right (BS.concat $ toChunks bs, Just mime)
+
+-- | Read from a URL and return raw data and maybe mime type.
+openURL :: String -> IO (Either E.SomeException (BS.ByteString, Maybe MimeType))
+openURL u
+  | Just u'' <- stripPrefix "data:" u =
+    let mime     = takeWhile (/=',') u''
+        contents = B8.pack $ unEscapeString $ drop 1 $ dropWhile (/=',') u''
+    in  return $ Right (decodeLenient contents, Just mime)
+#ifdef HTTP_CLIENT
+  | otherwise = withSocketsDo $ E.try $ do
+#if MIN_VERSION_http_client(0,4,30)
+     let parseReq = parseRequest
+#else
+     let parseReq = parseUrl
+#endif
+     (proxy :: Either E.SomeException String) <- E.try $ getEnv "http_proxy"
+     req <- parseReq u
+     req' <- case proxy of
+                     Left _   -> return req
+                     Right pr -> (parseReq pr >>= \r ->
+                                  return $ addProxy (host r) (port r) req)
+                                  `mplus` return req
+#if MIN_VERSION_http_client(0,4,18)
+     resp <- newManager tlsManagerSettings >>= httpLbs req'
+#else
+     resp <- withManager tlsManagerSettings $ httpLbs req'
+#endif
+     return (BS.concat $ toChunks $ responseBody resp,
+             UTF8.toString `fmap` lookup hContentType (responseHeaders resp))
+#else
+  | otherwise = E.try $ getBodyAndMimeType `fmap` browse
+              (do S.liftIO $ UTF8.hPutStrLn stderr $ "Fetching " ++ u ++ "..."
+                  setOutHandler $ const (return ())
+                  setAllowRedirects True
+                  request (getRequest' u'))
+  where getBodyAndMimeType (_, r) = (rspBody r, findHeader HdrContentType r)
+        getRequest' uriString = case parseURI uriString of
+                                   Nothing -> error ("Not a valid URL: " ++
+                                                        uriString)
+                                   Just v  -> mkRequest GET v
+        u' = escapeURIString (/= '|') u  -- pipes are rejected by Network.URI
+#endif
+
+--
 -- Error reporting
 --
 
@@ -745,6 +988,66 @@ mapLeft _ (Right x) = Right x
 hush :: Either a b -> Maybe b
 hush (Left _) = Nothing
 hush (Right x) = Just x
+
+-- | Remove intermediate "." and ".." directories from a path.
+--
+-- > collapseFilePath "./foo" == "foo"
+-- > collapseFilePath "/bar/../baz" == "/baz"
+-- > collapseFilePath "/../baz" == "/../baz"
+-- > collapseFilePath "parent/foo/baz/../bar" ==  "parent/foo/bar"
+-- > collapseFilePath "parent/foo/baz/../../bar" ==  "parent/bar"
+-- > collapseFilePath "parent/foo/.." ==  "parent"
+-- > collapseFilePath "/parent/foo/../../bar" ==  "/bar"
+collapseFilePath :: FilePath -> FilePath
+collapseFilePath = Posix.joinPath . reverse . foldl go [] . splitDirectories
+  where
+    go rs "." = rs
+    go r@(p:rs) ".." = case p of
+                            ".." -> ("..":r)
+                            (checkPathSeperator -> Just True) -> ("..":r)
+                            _ -> rs
+    go _ (checkPathSeperator -> Just True) = [[Posix.pathSeparator]]
+    go rs x = x:rs
+    isSingleton [] = Nothing
+    isSingleton [x] = Just x
+    isSingleton _ = Nothing
+    checkPathSeperator = fmap isPathSeparator . isSingleton
+
+---
+--- Squash blocks into inlines
+---
+
+blockToInlines :: Block -> [Inline]
+blockToInlines (Plain ils) = ils
+blockToInlines (Para ils) = ils
+blockToInlines (CodeBlock attr str) = [Code attr str]
+blockToInlines (RawBlock fmt str) = [RawInline fmt str]
+blockToInlines (BlockQuote blks) = blocksToInlines blks
+blockToInlines (OrderedList _ blkslst) =
+  concatMap blocksToInlines blkslst
+blockToInlines (BulletList blkslst) =
+  concatMap blocksToInlines blkslst
+blockToInlines (DefinitionList pairslst) =
+  concatMap f pairslst
+  where
+    f (ils, blkslst) = ils ++
+      [Str ":", Space] ++
+      (concatMap blocksToInlines blkslst)
+blockToInlines (Header _ _  ils) = ils
+blockToInlines (HorizontalRule) = []
+blockToInlines (Table _ _ _ headers rows) =
+  intercalate [LineBreak] $ map (concatMap blocksToInlines) tbl
+  where
+    tbl = headers : rows
+blockToInlines (Div _ blks) = blocksToInlines blks
+blockToInlines Null = []
+
+blocksToInlinesWithSep :: [Inline] -> [Block] -> [Inline]
+blocksToInlinesWithSep sep blks = intercalate sep $ map blockToInlines blks
+
+blocksToInlines :: [Block] -> [Inline]
+blocksToInlines = blocksToInlinesWithSep [Space, Str "¶", Space]
+
 
 --
 -- Safe read

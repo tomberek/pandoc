@@ -34,10 +34,10 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Lazy.Char8 as BL8
 import qualified Data.Map as M
+import qualified Data.Set as Set
 import qualified Text.Pandoc.UTF8 as UTF8
 import Codec.Archive.Zip
 import Data.Time.Clock.POSIX
-import Data.Time.Clock
 import System.Environment
 import Text.Pandoc.Compat.Time
 import Text.Pandoc.Definition
@@ -64,8 +64,8 @@ import Text.Pandoc.Compat.Monoid ((<>))
 import Text.Pandoc.MIME (MimeType, getMimeType, getMimeTypeDef,
                          extensionFromMimeType)
 import Control.Applicative ((<|>))
-import Data.Maybe (fromMaybe, mapMaybe, maybeToList)
-import Data.Char (ord)
+import Data.Maybe (fromMaybe, mapMaybe, maybeToList, isNothing)
+import Data.Char (ord, isSpace, toLower)
 
 data ListMarker = NoMarker
                 | BulletMarker
@@ -95,7 +95,7 @@ data WriterState = WriterState{
          stTextProperties :: [Element]
        , stParaProperties :: [Element]
        , stFootnotes      :: [Element]
-       , stSectionIds     :: [String]
+       , stSectionIds     :: Set.Set String
        , stExternalLinks  :: M.Map String String
        , stImages         :: M.Map FilePath (String, String, Maybe MimeType, Element, B.ByteString)
        , stListLevel      :: Int
@@ -110,6 +110,8 @@ data WriterState = WriterState{
        , stStyleMaps      :: StyleMaps
        , stFirstPara      :: Bool
        , stTocTitle       :: [Inline]
+       , stDynamicParaProps :: [String]
+       , stDynamicTextProps :: [String]
        }
 
 defaultWriterState :: WriterState
@@ -117,7 +119,7 @@ defaultWriterState = WriterState{
         stTextProperties = []
       , stParaProperties = []
       , stFootnotes      = defaultFootnotes
-      , stSectionIds     = []
+      , stSectionIds     = Set.empty
       , stExternalLinks  = M.empty
       , stImages         = M.empty
       , stListLevel      = -1
@@ -132,6 +134,8 @@ defaultWriterState = WriterState{
       , stStyleMaps      = defaultStyleMaps
       , stFirstPara      = False
       , stTocTitle       = normalizeInlines [Str "Table of Contents"]
+      , stDynamicParaProps = []
+      , stDynamicTextProps = []
       }
 
 type WS a = StateT WriterState IO a
@@ -245,7 +249,7 @@ writeDocx opts doc@(Pandoc meta _) = do
   let tocTitle = fromMaybe (stTocTitle defaultWriterState) $
                     metaValueToInlines <$> lookupMeta "toc-title" meta
 
-  ((contents, footnotes), st) <- runStateT (writeOpenXML opts{writerWrapText = False} doc')
+  ((contents, footnotes), st) <- runStateT (writeOpenXML opts{writerWrapText = WrapNone} doc')
                        defaultWriterState{ stChangesAuthor = fromMaybe "unknown" username
                                          , stChangesDate   = formatTime defaultTimeLocale "%FT%XZ" utctime
                                          , stPrintWidth = (maybe 420 (\x -> quot x 20) pgContentWidth)
@@ -404,7 +408,21 @@ writeDocx opts doc@(Pandoc meta _) = do
         linkrels
 
   -- styles
-  let newstyles = styleToOpenXml styleMaps $ writerHighlightStyle opts
+
+  -- We only want to inject paragraph and text properties that
+  -- are not already in the style map. Note that keys in the stylemap
+  -- are normalized as lowercase.
+  let newDynamicParaProps = filter
+        (\sty -> isNothing $ M.lookup (toLower <$> sty) $ getMap $ sParaStyleMap styleMaps)
+        (stDynamicParaProps st)
+
+      newDynamicTextProps = filter
+        (\sty -> isNothing $ M.lookup (toLower <$> sty) $ getMap $ sCharStyleMap styleMaps)
+        (stDynamicTextProps st)
+
+  let newstyles = map newParaPropToOpenXml newDynamicParaProps ++
+                  map newTextPropToOpenXml newDynamicTextProps ++
+                  (styleToOpenXml styleMaps $ writerHighlightStyle opts) 
   let styledoc' = styledoc{ elContent = modifyContent (elContent styledoc) }
                   where
                     modifyContent
@@ -439,10 +457,9 @@ writeDocx opts doc@(Pandoc meta _) = do
           ,("xmlns:xsi","http://www.w3.org/2001/XMLSchema-instance")]
           $ mknode "dc:title" [] (stringify $ docTitle meta)
           : mknode "dc:creator" [] (intercalate "; " (map stringify $ docAuthors meta))
-          : maybe []
-             (\x -> [ mknode "dcterms:created" [("xsi:type","dcterms:W3CDTF")] x
-                    , mknode "dcterms:modified" [("xsi:type","dcterms:W3CDTF")] x
-                    ]) (normalizeDate $ stringify $ docDate meta)
+          : (\x -> [ mknode "dcterms:created" [("xsi:type","dcterms:W3CDTF")] x
+                   , mknode "dcterms:modified" [("xsi:type","dcterms:W3CDTF")] x
+                   ]) (formatTime defaultTimeLocale "%FT%XZ" utctime)
   let docPropsEntry = toEntry docPropsPath epochtime $ renderXml docProps
 
   let relsPath = "_rels/.rels"
@@ -500,6 +517,28 @@ writeDocx opts doc@(Pandoc meta _) = do
                   miscRelEntries ++ otherMediaEntries
   return $ fromArchive archive
 
+
+newParaPropToOpenXml :: String -> Element
+newParaPropToOpenXml s =
+  let styleId = filter (not . isSpace) s
+  in mknode "w:style" [ ("w:type", "paragraph")
+                      , ("w:customStyle", "1")
+                      , ("w:styleId", styleId)]
+     [ mknode "w:name" [("w:val", s)] ()
+     , mknode "w:basedOn" [("w:val","BodyText")] ()
+     , mknode "w:qFormat" [] ()
+     ]
+
+newTextPropToOpenXml :: String -> Element
+newTextPropToOpenXml s =
+  let styleId = filter (not . isSpace) s
+  in mknode "w:style" [ ("w:type", "character")
+                      , ("w:customStyle", "1")
+                      , ("w:styleId", styleId)]
+     [ mknode "w:name" [("w:val", s)] ()
+     , mknode "w:basedOn" [("w:val","BodyTextChar")] ()
+     ]
+
 styleToOpenXml :: StyleMaps -> Style -> [Element]
 styleToOpenXml sm style =
   maybeToList parStyle ++ mapMaybe toStyle alltoktypes
@@ -536,7 +575,6 @@ styleToOpenXml sm style =
                              , mknode "w:link" [("w:val","VerbatimChar")] ()
                              , mknode "w:pPr" []
                                $ mknode "w:wordWrap" [("w:val","off")] ()
-                               : mknode "w:noProof" [] ()
                                : ( maybe [] (\col -> [mknode "w:shd" [("w:val","clear"),("w:fill",drop 1 $ fromColor col)] ()])
                                  $ backgroundColor style )
                              ]
@@ -724,9 +762,17 @@ getUniqueId :: MonadIO m => m String
 -- already in word/document.xml.rel
 getUniqueId = liftIO $ (show . (+ 20) . hashUnique) `fmap` newUnique
 
+-- | Key for specifying user-defined docx styles.
+dynamicStyleKey :: String
+dynamicStyleKey = "custom-style"
+
 -- | Convert a Pandoc block element to OpenXML.
 blockToOpenXML :: WriterOptions -> Block -> WS [Element]
 blockToOpenXML _ Null = return []
+blockToOpenXML opts (Div (_,_,kvs) bs)
+  | Just sty <- lookup dynamicStyleKey kvs = do
+      modify $ \s -> s{stDynamicParaProps = sty : (stDynamicParaProps s)}
+      withParaPropM (pStyleM sty) $ blocksToOpenXML opts bs
 blockToOpenXML opts (Div (_,["references"],_) bs) = do
   let (hs, bs') = span isHeaderBlock bs
   header <- blocksToOpenXML opts hs
@@ -743,7 +789,7 @@ blockToOpenXML opts (Header lev (ident,_,_) lst) = do
   let bookmarkName = if null ident
                         then uniqueIdent lst usedIdents
                         else ident
-  modify $ \s -> s{ stSectionIds = bookmarkName : stSectionIds s }
+  modify $ \s -> s{ stSectionIds = Set.insert bookmarkName $ stSectionIds s }
   id' <- getUniqueId
   let bookmarkStart = mknode "w:bookmarkStart" [("w:id", id')
                                                ,("w:name",bookmarkName)] ()
@@ -752,7 +798,7 @@ blockToOpenXML opts (Header lev (ident,_,_) lst) = do
 blockToOpenXML opts (Plain lst) = withParaProp (pCustomStyle "Compact")
   $ blockToOpenXML opts (Para lst)
 -- title beginning with fig: indicates that the image is a figure
-blockToOpenXML opts (Para [Image alt (src,'f':'i':'g':':':tit)]) = do
+blockToOpenXML opts (Para [Image attr alt (src,'f':'i':'g':':':tit)]) = do
   setFirstPara
   pushParaProp $ pCustomStyle $
     if null alt
@@ -760,7 +806,7 @@ blockToOpenXML opts (Para [Image alt (src,'f':'i':'g':':':tit)]) = do
       else "FigureWithCaption"
   paraProps <- getParaProps False
   popParaProp
-  contents <- inlinesToOpenXML opts [Image alt (src,tit)]
+  contents <- inlinesToOpenXML opts [Image attr alt (src,tit)]
   captionNode <- withParaProp (pCustomStyle "ImageCaption")
                  $ blockToOpenXML opts (Para alt)
   return $ mknode "w:p" [] (paraProps ++ contents) : captionNode
@@ -982,7 +1028,13 @@ setFirstPara =  modify $ \s -> s { stFirstPara = True }
 inlineToOpenXML :: WriterOptions -> Inline -> WS [Element]
 inlineToOpenXML _ (Str str) = formattedString str
 inlineToOpenXML opts Space = inlineToOpenXML opts (Str " ")
-inlineToOpenXML opts (Span (_,classes,kvs) ils)
+inlineToOpenXML opts SoftBreak = inlineToOpenXML opts (Str " ")
+inlineToOpenXML opts (Span (ident,classes,kvs) ils)
+  | Just sty <- lookup dynamicStyleKey kvs = do
+      let kvs' = filter ((dynamicStyleKey, sty)/=) kvs
+      modify $ \s -> s{stDynamicTextProps = sty : (stDynamicTextProps s)}
+      withTextProp (rCustomStyle sty) $
+        inlineToOpenXML opts (Span (ident,classes,kvs') ils)
   | "insertion" `elem` classes = do
     defaultAuthor <- gets stChangesAuthor
     defaultDate <- gets stChangesDate
@@ -1044,6 +1096,7 @@ inlineToOpenXML opts (Math mathType str) = do
   let displayType = if mathType == DisplayMath
                        then DisplayBlock
                        else DisplayInline
+  when (displayType == DisplayBlock) setFirstPara
   case writeOMML displayType <$> readTeX str of
         Right r -> return [r]
         Left  _ -> inlinesToOpenXML opts (texMathToInlines mathType str)
@@ -1070,8 +1123,8 @@ inlineToOpenXML opts (Note bs) = do
                    [ mknode "w:rPr" [] footnoteStyle
                    , mknode "w:footnoteRef" [] () ]
   let notemarkerXml = RawInline (Format "openxml") $ ppElement notemarker
-  let insertNoteRef (Plain ils : xs) = Plain (notemarkerXml : ils) : xs
-      insertNoteRef (Para ils  : xs) = Para  (notemarkerXml : ils) : xs
+  let insertNoteRef (Plain ils : xs) = Plain (notemarkerXml : Space : ils) : xs
+      insertNoteRef (Para ils  : xs) = Para  (notemarkerXml : Space : ils) : xs
       insertNoteRef xs               = Para [notemarkerXml] : xs
   oldListLevel <- gets stListLevel
   oldParaProperties <- gets stParaProperties
@@ -1087,11 +1140,11 @@ inlineToOpenXML opts (Note bs) = do
            [ mknode "w:rPr" [] footnoteStyle
            , mknode "w:footnoteReference" [("w:id", notenum)] () ] ]
 -- internal link:
-inlineToOpenXML opts (Link txt ('#':xs,_)) = do
+inlineToOpenXML opts (Link _ txt ('#':xs,_)) = do
   contents <- withTextPropM (rStyleM "Hyperlink") $ inlinesToOpenXML opts txt
   return [ mknode "w:hyperlink" [("w:anchor",xs)] contents ]
 -- external link:
-inlineToOpenXML opts (Link txt (src,_)) = do
+inlineToOpenXML opts (Link _ txt (src,_)) = do
   contents <- withTextPropM (rStyleM "Hyperlink") $ inlinesToOpenXML opts txt
   extlinks <- gets stExternalLinks
   id' <- case M.lookup src extlinks of
@@ -1102,7 +1155,7 @@ inlineToOpenXML opts (Link txt (src,_)) = do
                         M.insert src i extlinks }
               return i
   return [ mknode "w:hyperlink" [("r:id",id')] contents ]
-inlineToOpenXML opts (Image alt (src, tit)) = do
+inlineToOpenXML opts (Image attr alt (src, _)) = do
   -- first, check to see if we've already done this image
   pageWidth <- gets stPrintWidth
   imgs <- gets stImages
@@ -1118,13 +1171,8 @@ inlineToOpenXML opts (Image alt (src, tit)) = do
           inlinesToOpenXML opts alt
         Right (img, mt) -> do
           ident <- ("rId"++) `fmap` getUniqueId
-          (xpt,ypt) <- case imageSize img of
-                             Right size  -> return $ sizeInPoints size
-                             Left msg    -> do
-                               liftIO $ warn $
-                                 "Could not determine image size in `" ++
-                                 src ++ "': " ++ msg
-                               return (120,120)
+          let (xpt,ypt) = desiredSizeInPoints opts attr
+                 (either (const def) id (imageSize img))
           -- 12700 emu = 1 pt
           let (xemu,yemu) = fitToPage (xpt * 12700, ypt * 12700) (pageWidth * 12700)
           let cNvPicPr = mknode "pic:cNvPicPr" [] $
@@ -1158,7 +1206,7 @@ inlineToOpenXML opts (Image alt (src, tit)) = do
                  mknode "wp:inline" []
                   [ mknode "wp:extent" [("cx",show xemu),("cy",show yemu)] ()
                   , mknode "wp:effectExtent" [("b","0"),("l","0"),("r","0"),("t","0")] ()
-                  , mknode "wp:docPr" [("descr",tit),("id","1"),("name","Picture")] ()
+                  , mknode "wp:docPr" [("descr",stringify alt),("id","1"),("name","Picture")] ()
                   , graphic ]
           let imgext = case mt >>= extensionFromMimeType of
                             Just x    -> '.':x
@@ -1211,11 +1259,9 @@ parseXml refArchive distArchive relpath =
 
 -- | Scales the image to fit the page
 -- sizes are passed in emu
-fitToPage :: (Integer, Integer) -> Integer -> (Integer, Integer)
+fitToPage :: (Double, Double) -> Integer -> (Integer, Integer)
 fitToPage (x, y) pageWidth
   -- Fixes width to the page width and scales the height
-  | x > pageWidth =
-    (pageWidth, round $
-      ((fromIntegral pageWidth) / ((fromIntegral :: Integer -> Double) x)) * (fromIntegral y))
-  | otherwise = (x, y)
-
+  | x > fromIntegral pageWidth =
+    (pageWidth, floor $ ((fromIntegral pageWidth) / x) * y)
+  | otherwise = (floor x, floor y)
